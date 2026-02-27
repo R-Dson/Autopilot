@@ -1,0 +1,34 @@
+[project]
+name = "autopilot"
+version = "0.1.1"
+description = "Autopilot - Architect-First AI Orchestrator"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp>=1.2.1",
+    "pydantic>=2.10.6",
+    "sqlmodel>=0.0.34",
+    "typer>=0.15.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.14.0",
+    "click>=8.1.0",
+]
+
+[project.scripts]
+autopilot = "autopilot.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["autopilot"]
+
+[tool.hatch.build]
+include = [
+    "autopilot/agents_templates/**/*",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
