@@ -15,36 +15,50 @@ AGENT_REGISTRY = {
         "name": "Spec Writer",
         "description": "Creates and refines feature specifications",
         "mode": "primary",
+        "user_invokable": True,
+        "allowed_subagents": ["architect"],
     },
     "architect": {
         "name": "Architect",
         "description": "Translates specs into atomic tasks for Autopilot",
         "mode": "subagent",
+        "user_invokable": False,
+        "allowed_subagents": [],
     },
     "autopilot": {
         "name": "Autopilot",
         "description": "Runs the automation loop - coordinates Implementer and Reviewer agents",
         "mode": "primary",
+        "user_invokable": True,
+        "allowed_subagents": ["implementer", "test-reviewer", "reviewer", "security-reviewer"],
     },
     "implementer": {
         "name": "Implementer",
         "description": "Implements atomic tasks from the Autopilot Kanban board",
         "mode": "subagent",
+        "user_invokable": False,
+        "allowed_subagents": [],
     },
     "reviewer": {
         "name": "Code Reviewer",
         "description": "Reviews and approves code changes",
         "mode": "subagent",
+        "user_invokable": False,
+        "allowed_subagents": [],
     },
     "test-reviewer": {
         "name": "Test Reviewer",
         "description": "Reviews test coverage and quality - verifies tests pass and cover real code",
         "mode": "subagent",
+        "user_invokable": False,
+        "allowed_subagents": [],
     },
     "security-reviewer": {
         "name": "Security Reviewer",
         "description": "Reviews code for security vulnerabilities with focus on OWASP Top 10, Zero Trust, and AI/ML security",
         "mode": "subagent",
+        "user_invokable": False,
+        "allowed_subagents": [],
     },
 }
 
@@ -103,7 +117,8 @@ mode: {mode}
         frontmatter="""---
 description: {description}
 name: {name}
-tools: {tools_list}
+user-invokable: {user_invokable}
+{agents_list}{tools}
 {handoffs}
 ---
 {body}""",
@@ -140,6 +155,7 @@ tools: {tools_list}
 description: {description}
 name: {name}
 tools: {tools_list}
+mcpServers: autopilot
 ---
 {body}""",
     ),
@@ -189,18 +205,49 @@ def compose_agent_file(
 
     if editor == "vscode":
         handoffs = config.handoffs.get(agent_id, "")
+        user_invokable = agent_meta.get("user_invokable", True)
+        allowed_subagents = agent_meta.get("allowed_subagents", [])
+        
+        # Format agents list (only include if non-empty)
+        if allowed_subagents:
+            agents_list = f"agents: {allowed_subagents}\n"
+        else:
+            agents_list = ""
+        
+        # Format tools line
+        tools_line = f"tools: {perm_str}" if perm_str else ""
+        
         return config.frontmatter.format(
             description=description,
             name=name,
-            tools_list=perm_str,
+            user_invokable=str(user_invokable).lower(),
+            agents_list=agents_list,
+            tools=tools_line,
             handoffs=handoffs,
             body=core_body,
         )
     elif editor == "claude":
+        user_invokable = agent_meta.get("user_invokable", True)
+        allowed_subagents = agent_meta.get("allowed_subagents", [])
+        
+        # Build tools list
+        base_tools = ["Read", "Grep", "Glob", "Question"]
+        
+        if allowed_subagents:
+            # Coordinator (main agent): restrict Task to specific subagents
+            agents_list_str = ", ".join(f'"{agent}"' for agent in allowed_subagents)
+            tools_str = f"Task({agents_list_str}), " + ", ".join(base_tools)
+        elif user_invokable:
+            # Regular main agent (can be invoked): include unrestricted Task
+            tools_str = "Task, " + ", ".join(base_tools)
+        else:
+            # Subagent-only (cannot spawn): exclude Task entirely
+            tools_str = ", ".join(base_tools)
+        
         return config.frontmatter.format(
             description=description,
             name=name,
-            tools_list=perm_str,
+            tools_list=tools_str,
             body=core_body,
         )
     else:

@@ -113,14 +113,16 @@ POTENTIAL CONCERNS:
 5. **Architect Phase:** 
    - Confirm completion: `Spec is complete and saved to specs/`
    - Ask: `Ready to proceed? I'll launch the Architect to break this into tasks.`
-   - If user says "yes": Use the `task` tool with `subagent_type="architect"` to spawn the Architect agent.
+   - If user says "yes": Use the `task` tool with `subagent_type="architect"` to spawn the Architect agent as a subagent.
    - After Architect returns with task summary:
-      - Inform the human: `Tasks created! Please switch to Autopilot agent to begin implementation.`
-     - Do NOT spawn Manager - let the human switch modes manually.
+      - Display the created tasks to the user
+      - Inform the human: `Spec complete and tasks created! **Next step: Switch to the Autopilot agent to begin implementation.**`
+      - Do NOT spawn Autopilot - let the user manually switch to the Autopilot agent in VS Code Copilot
 
 ## CRITICAL RULES - YOU MUST FOLLOW THESE
 - **STOP after spec is done** - Do NOT proceed to spawn Architect until user explicitly approves
 - **WAIT for "yes"** - Only spawn Architect after user says yes/approve
+- **User must manually switch** - After Architect completes, the user must manually switch to the Autopilot agent (VS Code Copilot cannot auto-switch agents)
 - Use `question tool` for ALL clarifications - don't assume
 - If user says "wait" or "not yet", stop and wait
 
