@@ -11,49 +11,54 @@ from .models import Task, TaskStatus
 app = typer.Typer(help="Autopilot - Architect-First AI Orchestrator")
 
 AGENT_REGISTRY = {
-    "spec-writer": {
+    "Spec Writer": {
         "name": "Spec Writer",
         "description": "Creates and refines feature specifications",
         "mode": "primary",
         "user_invokable": True,
-        "allowed_subagents": ["architect"],
+        "allowed_subagents": ["Architect"],
     },
-    "architect": {
+    "Architect": {
         "name": "Architect",
         "description": "Translates specs into atomic tasks for Autopilot",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "autopilot": {
+    "Autopilot": {
         "name": "Autopilot",
-        "description": "Runs the automation loop - coordinates Implementer and Reviewer agents",
+        "description": "Runs the automation loop - coordinates Implementer and Code Reviewer agents",
         "mode": "primary",
         "user_invokable": True,
-        "allowed_subagents": ["implementer", "test-reviewer", "reviewer", "security-reviewer"],
+        "allowed_subagents": [
+            "Implementer",
+            "Test Reviewer",
+            "Code Reviewer",
+            "Security Reviewer",
+        ],
     },
-    "implementer": {
+    "Implementer": {
         "name": "Implementer",
         "description": "Implements atomic tasks from the Autopilot Kanban board",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "reviewer": {
+    "Code Reviewer": {
         "name": "Code Reviewer",
         "description": "Reviews and approves code changes",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "test-reviewer": {
+    "Test Reviewer": {
         "name": "Test Reviewer",
         "description": "Reviews test coverage and quality - verifies tests pass and cover real code",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "security-reviewer": {
+    "Security Reviewer": {
         "name": "Security Reviewer",
         "description": "Reviews code for security vulnerabilities with focus on OWASP Top 10, Zero Trust, and AI/ML security",
         "mode": "subagent",
@@ -123,29 +128,17 @@ user-invokable: {user_invokable}
 ---
 {body}""",
         handoffs={
-            "autopilot": """handoffs:
-  - label: Start Task
-    agent: Implementer
-    prompt: Implement the selected task.
-    send: false
-  - label: Review Task
-    agent: Code Reviewer
-    prompt: Review the selected task.
-    send: false
-  - label: Test Review
-    agent: Test Reviewer
-    prompt: Review the tests for the selected task.
-    send: false
-  - label: Security Review
-    agent: Security Reviewer
-    prompt: Review the security for the selected task.
-    send: false""",
-            "implementer": "",
-            "reviewer": "",
-            "test-reviewer": "",
-            "security-reviewer": "",
-            "architect": "",
-            "spec-writer": "",
+            "Autopilot": "",
+            "Implementer": "",
+            "Code Reviewer": "",
+            "Test Reviewer": "",
+            "Security Reviewer": "",
+            "Architect": "",
+            "Spec Writer": """handoffs:
+  - label: Implement Specification
+    agent: Autopilot
+    prompt: Please implement the feature described in this specification.
+    send: true""",
         },
     ),
     "claude": EditorConfig(
@@ -206,33 +199,37 @@ def compose_agent_file(
     if editor == "vscode":
         handoffs = config.handoffs.get(agent_id, "")
         user_invokable = agent_meta.get("user_invokable", True)
+
         allowed_subagents = agent_meta.get("allowed_subagents", [])
-        
+
         # Format agents list (only include if non-empty)
         if allowed_subagents:
             agents_list = f"agents: {allowed_subagents}\n"
         else:
             agents_list = ""
-        
+
         # Format tools line
-        tools_line = f"tools: {perm_str}" if perm_str else ""
-        
+        tools_line = f"tools: {list(tools.keys())}" if tools else ""
+
+        # Format handoffs (remove leading newline if empty)
+        handoffs_str = f"{handoffs}\n" if handoffs else ""
+
         return config.frontmatter.format(
             description=description,
             name=name,
             user_invokable=str(user_invokable).lower(),
             agents_list=agents_list,
             tools=tools_line,
-            handoffs=handoffs,
+            handoffs=handoffs_str,
             body=core_body,
-        )
+        ).replace("\n\n---", "\n---")
     elif editor == "claude":
         user_invokable = agent_meta.get("user_invokable", True)
         allowed_subagents = agent_meta.get("allowed_subagents", [])
-        
+
         # Build tools list
         base_tools = ["Read", "Grep", "Glob", "Question"]
-        
+
         if allowed_subagents:
             # Coordinator (main agent): restrict Task to specific subagents
             agents_list_str = ", ".join(f'"{agent}"' for agent in allowed_subagents)
@@ -243,7 +240,7 @@ def compose_agent_file(
         else:
             # Subagent-only (cannot spawn): exclude Task entirely
             tools_str = ", ".join(base_tools)
-        
+
         return config.frontmatter.format(
             description=description,
             name=name,
@@ -299,7 +296,7 @@ def install_agents(
     # These override the default tools to enforce workflow
     agent_permissions = {
         "opencode": {
-            "spec-writer": {
+            "Spec Writer": {
                 "read": "allow",
                 "edit": "allow",
                 "write": "allow",
@@ -308,7 +305,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "architect": {
+            "Architect": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -317,7 +314,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "autopilot": {
+            "Autopilot": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -326,7 +323,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "implementer": {
+            "Implementer": {
                 "read": "allow",
                 "edit": "allow",
                 "write": "allow",
@@ -335,7 +332,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "reviewer": {
+            "Code Reviewer": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -344,7 +341,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "test-reviewer": {
+            "Test Reviewer": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -353,7 +350,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "security-reviewer": {
+            "Security Reviewer": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -364,58 +361,112 @@ def install_agents(
             },
         },
         "vscode": {
-            "spec-writer": {"mcp": "true", "task": "true", "question": "true"},
-            "architect": {"mcp": "true", "task": "true", "question": "true"},
-            "autopilot": {"mcp": "true", "task": "true", "question": "true"},
-            "implementer": {"mcp": "true", "bash": "true", "question": "true"},
-            "reviewer": {"mcp": "true", "bash": "true", "question": "true"},
-            "test-reviewer": {"mcp": "true", "bash": "true", "question": "true"},
-            "security-reviewer": {"mcp": "true", "bash": "true", "question": "true"},
+            "Spec Writer": {
+                "vscode": "true",
+                "execute": "true",
+                "read": "true",
+                "agent": "true",
+                "edit": "true",
+                "search": "true",
+                "web": "true",
+                "todo": "true",
+                "autopilot-server/*": "true",
+            },
+            "Architect": {
+                "read": "true",
+                "search": "true",
+                "autopilot-server/*": "true",
+                "task": "true",
+                "question": "true",
+            },
+            "Autopilot": {
+                "vscode": "true",
+                "agent": "true",
+                "web": "true",
+                "autopilot-server/*": "true",
+                "todo": "true",
+            },
+            "Implementer": {
+                "vscode": "true",
+                "execute": "true",
+                "read": "true",
+                "agent": "true",
+                "edit": "true",
+                "search": "true",
+                "web": "true",
+                "todo": "true",
+                "bash": "true",
+                "autopilot-server/*": "true",
+            },
+            "Code Reviewer": {
+                "read": "true",
+                "search": "true",
+                "execute": "true",
+                "bash": "true",
+                "autopilot-server/*": "true",
+                "question": "true",
+            },
+            "Test Reviewer": {
+                "read": "true",
+                "search": "true",
+                "execute": "true",
+                "bash": "true",
+                "autopilot-server/*": "true",
+                "question": "true",
+            },
+            "Security Reviewer": {
+                "read": "true",
+                "search": "true",
+                "execute": "true",
+                "bash": "true",
+                "autopilot-server/*": "true",
+                "question": "true",
+            },
         },
         "claude": {
-            "spec-writer": {
+            "Spec Writer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Task": "true",
                 "Question": "true",
             },
-            "architect": {
+            "Architect": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Task": "true",
                 "Question": "true",
             },
-            "autopilot": {
+            "Autopilot": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Task": "true",
                 "Question": "true",
             },
-            "implementer": {
+            "Implementer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Bash": "true",
                 "Question": "true",
             },
-            "reviewer": {
+            "Code Reviewer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Bash": "true",
                 "Question": "true",
             },
-            "test-reviewer": {
+            "Test Reviewer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Bash": "true",
                 "Question": "true",
             },
-            "security-reviewer": {
+            "Security Reviewer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
@@ -428,7 +479,7 @@ def install_agents(
     core_dir = resources.files("autopilot") / "agents_templates" / "core"
 
     for agent_id in AGENT_REGISTRY.keys():
-        core_file = core_dir / f"{agent_id}.md"
+        core_file = core_dir / f"{agent_id.replace(' ', '-').lower()}.md"
         if not core_file.is_file():
             print(f"  ! Warning: Core template for '{agent_id}' not found, skipping.")
             continue
@@ -441,7 +492,8 @@ def install_agents(
         output = compose_agent_file(agent_id, editor, core_body, tools, mode)
 
         output_file = os.path.join(
-            target_dir, f"{agent_id}{EDITOR_CONFIGS[editor].file_ext}"
+            target_dir,
+            f"{agent_id.replace(' ', '-').lower()}{EDITOR_CONFIGS[editor].file_ext}",
         )
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(output)
@@ -451,8 +503,8 @@ def install_agents(
     print(f"\nSuccessfully installed {editor} agents user-wide.")
 
 
-@app.command()
-def list(
+@app.command("list")
+def list_tasks(
     jira_id: Optional[str] = typer.Option(None, help="Filter by JIRA ID"),
     status_filter: Optional[str] = typer.Option(None, help="Filter by status"),
 ):

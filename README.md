@@ -46,13 +46,17 @@ Any rejection resets task for full re-review. Tasks fail after 10 test rejection
     }
 ```
 
-### VS Code Copilot (`settings.json`)
+### VS Code Copilot (`~/.config/Code/User/mcp.json`)
 ```json
-"github.copilot.chat.mcp.servers": {
-    "autopilot": {
-        "command": "autopilot",
-        "args": ["server"]
-    }
+{
+    "servers": {
+        "autopilot-server": {
+            "type": "stdio",
+            "command": "autopilot",
+            "args": ["server"]
+        }
+    },
+    "inputs": []
 }
 ```
 
