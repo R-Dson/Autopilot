@@ -105,6 +105,7 @@ def test_workspace_acquire_naming_collision_prevention():
 
         result = json.loads(result_json)
 
-        # Verify naming convention: feat/STABLE-102-T3 (dash instead of slash for task ID)
-        assert result["branch_name"] == f"feat/STABLE-102-T{task_id}"
+        # In new workflow, branch_name is None, feature_branch is set
+        assert result["branch_name"] is None
+        assert result["feature_branch"] == "feat/STABLE-102"
         assert "STABLE-102" in result["worktree_path"]

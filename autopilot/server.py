@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 from typing import List, Optional
 from mcp.server.fastmcp import FastMCP
 from sqlmodel import Session, select, text
@@ -116,7 +117,8 @@ def tasks_update(
 def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
     """
     Acquires a specific task, sets it to 'in_progress',
-    prepares a unique Git Worktree, and returns the task details.
+    prepares a Git Worktree for the feature, and returns the task details.
+    Reuses existing worktree for the feature if available.
     """
     db.init_db()
     git_manager = _get_git_manager(repo_root)
@@ -133,6 +135,23 @@ def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
         if task.status != TaskStatus.READY:
             return f"Error: Task {task_id} is not in READY status (current: {task.status})."
 
+        # Check if there's an existing worktree for this feature
+        existing_tasks = session.exec(
+            select(Task).where(
+                Task.jira_id == task.jira_id,
+            )
+        ).all()
+
+        existing_worktree = None
+        for existing_task in existing_tasks:
+            if (
+                existing_task.worktree_path is not None
+                and Path(existing_task.worktree_path).exists()
+            ):
+                existing_worktree = existing_task.worktree_path
+                logger.info(f"Reusing existing worktree: {existing_worktree}")
+                break
+
         # Mark as IN_PROGRESS immediately to "lock" it for this process
         task.status = TaskStatus.IN_PROGRESS
         session.add(task)
@@ -145,15 +164,18 @@ def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
 
     # Prepare Git Worktree (slow operation outside the exclusive DB lock)
     try:
-        worktree_path = git_manager.create_worktree(jira_id, task_id_db)
+        if existing_worktree:
+            worktree_path = existing_worktree
+        else:
+            worktree_path = git_manager.create_worktree(jira_id)
 
         # Update the task with worktree information
         with Session(db.engine) as session:
             task = session.get(Task, task_id)
             assert task is not None
             task.worktree_path = worktree_path
-            # Use T{task_id} suffix to avoid ref name collisions with JIRA ID branches
-            task.branch_name = f"feat/{task.jira_id}-T{task_id}"
+            task.feature_branch = f"feat/{jira_id}"
+            task.branch_name = None  # No task branch in new workflow
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -231,8 +253,8 @@ def tests_run_clean(worktree_path: str, framework: Optional[str] = None) -> str:
 @mcp.tool()
 def workspace_integrate(task_id: int, repo_root: Optional[str] = None) -> str:
     """
-    Merges a completed task branch into the main feature branch.
-    Call this after review approval.
+    Merges the feature branch into main when all tasks are complete.
+    Call this after review approval for the last task.
     """
     db.init_db()
     git_manager = _get_git_manager(repo_root)
@@ -245,50 +267,47 @@ def workspace_integrate(task_id: int, repo_root: Optional[str] = None) -> str:
         if task.status != TaskStatus.DONE:
             return f"Error: Task {task_id} must be DONE before integration."
 
-        if not task.worktree_path or not task.branch_name:
-            return "Error: Task missing worktree/branch info."
+        # Check if all tasks for this feature are done
+        all_tasks = session.exec(select(Task).where(Task.jira_id == task.jira_id)).all()
 
-        # Check that worktree is clean before attempting merge
-        try:
-            wt_git_manager = GitManager(task.worktree_path)
-            status = wt_git_manager.get_status()
+        incomplete_tasks = [t for t in all_tasks if t.status != TaskStatus.DONE]
 
-            # Extract lists (ensure they are lists, not strings)
-            unstaged = (
-                status["unstaged"] if isinstance(status["unstaged"], list) else []
-            )
-            untracked = (
-                status["untracked"] if isinstance(status["untracked"], list) else []
+        if incomplete_tasks:
+            return (
+                f"Task {task_id} marked as DONE, but feature {task.jira_id} "
+                f"has {len(incomplete_tasks)} incomplete task(s): "
+                f"{[t.id for t in incomplete_tasks]}. "
+                "Complete all tasks before integration."
             )
 
-            # Worktree must be clean (no unstaged or untracked changes)
-            if unstaged or untracked:
-                return (
-                    f"Error: Worktree {task.worktree_path} has uncommitted changes. "
-                    f"Unstaged: {unstaged}, Untracked: {untracked}. "
-                    "Please commit or discard changes before integration."
-                )
-        except (ValueError, RuntimeError) as e:
-            # If worktree is not a valid git repository, log warning but proceed
-            # This allows tests to work while still providing safety in real scenarios
-            logger.warning(
-                f"Could not verify worktree cleanliness for {task.worktree_path}: {e}"
-            )
-
-        target_branch = f"feat/{task.jira_id}"
+        # All tasks done - integrate feature branch into main
+        feature_branch = f"feat/{task.jira_id}"
 
         try:
-            git_manager.merge_task(task.worktree_path, task.branch_name, target_branch)
-            git_manager.push_branch(task.jira_id)
-            git_manager.cleanup_worktree(task.worktree_path)
+            # Merge feature branch into main
+            result = git_manager.merge_to_main(feature_branch)
 
-            task.worktree_path = None
-            session.add(task)
+            # Push feature branch to remote
+            try:
+                git_manager.push_branch(task.jira_id)
+            except RuntimeError as e:
+                logger.warning(f"Failed to push branch: {e}")
+
+            # Cleanup worktree(s)
+            for t in all_tasks:
+                if t.worktree_path and Path(t.worktree_path).exists():
+                    try:
+                        git_manager.cleanup_worktree(t.worktree_path)
+                        logger.info(f"Cleaned up worktree: {t.worktree_path}")
+                    except RuntimeError as e:
+                        logger.warning(f"Failed to cleanup worktree: {e}")
+                    t.worktree_path = None
+                    session.add(t)
+
             session.commit()
-
-            return f"Task {task_id} successfully integrated into {target_branch}."
+            return f"{result} Feature {task.jira_id} complete."
         except RuntimeError as e:
-            return f"Merge Conflict: {str(e)}. Please resolve in {task.worktree_path}."
+            return f"Integration error: {str(e)}. Manual resolution required."
 
 
 @mcp.tool()
@@ -417,7 +436,7 @@ def workspace_cleanup(
     jira_id: str, force: bool = False, repo_root: Optional[str] = None
 ) -> str:
     """
-    Manually triggers cleanup for a jira_id: pushes branch and removes worktree.
+    Manually triggers cleanup for a jira_id: pushes branch and removes worktree(s).
     Set force=True to cleanup even if not all tasks are done.
     """
     db.init_db()
@@ -434,25 +453,41 @@ def workspace_cleanup(
         if not force:
             incomplete_tasks = [t for t in tasks if t.status != TaskStatus.DONE]
             if incomplete_tasks:
-                return f"Error: {len(incomplete_tasks)} task(s) not done. Use force=True to cleanup anyway."
+                return (
+                    f"Error: {len(incomplete_tasks)} task(s) not done. "
+                    f"Use force=True to cleanup anyway."
+                )
 
-        # Find worktree path from any task
-        worktree_path = None
+        # Collect all worktrees for this feature (may have multiple from parallel execution)
+        worktrees_to_cleanup = set()
         for task in tasks:
             if task.worktree_path:
-                worktree_path = task.worktree_path
+                worktrees_to_cleanup.add(task.worktree_path)
                 task.worktree_path = None
                 session.add(task)
 
-        if not worktree_path:
-            return f"Error: No worktree found for {jira_id}."
+        if not worktrees_to_cleanup:
+            return f"Error: No worktrees found for {jira_id}."
 
         try:
-            git_manager.push_branch(jira_id)
-            git_manager.cleanup_worktree(worktree_path)
+            # Push feature branch to remote
+            try:
+                git_manager.push_branch(jira_id)
+            except RuntimeError as e:
+                logger.warning(f"Failed to push branch: {e}")
+
+            # Cleanup all worktrees
+            for worktree_path in worktrees_to_cleanup:
+                try:
+                    git_manager.cleanup_worktree(worktree_path)
+                    logger.info(f"Cleaned up worktree: {worktree_path}")
+                except RuntimeError as e:
+                    logger.warning(f"Failed to cleanup worktree {worktree_path}: {e}")
+
             session.commit()
             return (
-                f"Cleanup complete for {jira_id}: branch pushed and worktree removed."
+                f"Cleanup complete for {jira_id}: branch pushed and "
+                f"{len(worktrees_to_cleanup)} worktree(s) removed."
             )
         except Exception as e:
             return f"Error during cleanup: {str(e)}"

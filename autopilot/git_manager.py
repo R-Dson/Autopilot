@@ -17,43 +17,51 @@ class GitManager:
         except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError) as e:
             raise ValueError(f"Invalid git repository at: {self.repo_path}") from e
 
-    def create_worktree(self, jira_id: str, task_id: int) -> str:
+    def create_worktree(
+        self,
+        jira_id: str,
+        task_id: Optional[int] = None,
+        parallel_id: Optional[int] = None,
+    ) -> str:
         """
-        Creates a git worktree for the specific task.
-        Branch: feat/{jira_id}-T{task_id}
-        Worktree: {repo_name}-{jira_id}-{task_id}
+        Creates a git worktree for the feature.
+        Branch: feat/{jira_id} (feature-centric workflow, no task branches)
+        Worktree: {repo_name}-{jira_id} or {repo_name}-{jira_id}-{parallel_id}
+
+        Args:
+            jira_id: JIRA identifier for the feature
+            task_id: Task ID (kept for backward compatibility, unused in new workflow)
+            parallel_id: Optional parallel worker ID (for parallel execution)
+
+        Returns:
+            Path to the created/reused worktree
         """
         validate_jira_id(jira_id)
-        task_branch = f"feat/{jira_id}-T{task_id}"
-        base_branch = f"feat/{jira_id}"  # The main feature branch
-        worktree_path = (
-            self.repo_path.parent / f"{self.repo_path.name}-{jira_id}-{task_id}"
-        )
+        feature_branch = f"feat/{jira_id}"
+
+        if parallel_id is not None:
+            worktree_path = (
+                self.repo_path.parent / f"{self.repo_path.name}-{jira_id}-{parallel_id}"
+            )
+        else:
+            worktree_path = self.repo_path.parent / f"{self.repo_path.name}-{jira_id}"
 
         # Check if worktree already exists - return early if so
         if worktree_path.exists():
             logger.info(f"Worktree already exists: {worktree_path}")
             return str(worktree_path.resolve())
 
-        # Ensure base feature branch exists
-        self._ensure_branch(base_branch)
+        # Ensure feature branch exists
+        self._ensure_branch(feature_branch)
 
-        # Create worktree
+        # Create worktree pointing to feature branch (no new branch creation)
         try:
-            # Try to create new branch off base feature branch
-            self.repo.git.worktree(
-                "add", str(worktree_path), "-b", task_branch, base_branch
-            )
-            logger.info(f"Created new worktree: {worktree_path}")
-        except git.exc.GitCommandError:
-            # If branch already exists, just checkout
-            try:
-                self.repo.git.worktree("add", str(worktree_path), task_branch)
-                logger.info(f"Created worktree from existing branch: {worktree_path}")
-            except git.exc.GitCommandError as e:
-                error_msg = f"Failed to create worktree at {worktree_path}: {str(e)}"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg) from e
+            self.repo.git.worktree("add", str(worktree_path), feature_branch)
+            logger.info(f"Created worktree for feature branch: {worktree_path}")
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to create worktree at {worktree_path}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
         return str(worktree_path.resolve())
 
@@ -210,5 +218,74 @@ class GitManager:
             logger.info(f"Restored files: {files}")
         except git.exc.GitCommandError as e:
             error_msg = f"Failed to restore files {files}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def sync_feature_branch(self, worktree_path: str, feature_branch: str):
+        """
+        Pulls latest changes for feature branch from remote.
+        Used in parallel execution to sync changes between workers.
+        """
+        try:
+            wt_repo = Repo(worktree_path)
+            wt_repo.remote(name="origin").fetch()
+            try:
+                wt_repo.git.merge(f"origin/{feature_branch}")
+                logger.info(
+                    f"Synced feature branch {feature_branch} in {worktree_path}"
+                )
+            except git.exc.GitCommandError as e:
+                if "conflict" in str(e).lower():
+                    error_msg = f"Merge conflict when syncing feature branch {feature_branch}: {str(e)}"
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg) from e
+                else:
+                    error_msg = (
+                        f"Failed to sync feature branch {feature_branch}: {str(e)}"
+                    )
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg) from e
+        except (
+            git.exc.InvalidGitRepositoryError,
+            git.exc.GitCommandError,
+            ValueError,
+        ) as e:
+            error_msg = f"Invalid repository or error during sync: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def merge_to_main(self, feature_branch: str) -> str:
+        """
+        Merges the feature branch into the main branch.
+        Returns the merge commit message.
+        """
+        try:
+            # Ensure we're on main branch
+            self.repo.git.checkout("main")
+
+            # Pull latest main
+            try:
+                origin = self.repo.remote(name="origin")
+                origin.pull()
+            except (git.exc.GitCommandError, ValueError):
+                pass  # Ignore if origin not set up
+
+            # Merge feature branch
+            self.repo.git.merge(feature_branch, no_ff=True, m=f"Merge {feature_branch}")
+            logger.info(f"Merged {feature_branch} into main")
+            return f"Successfully merged {feature_branch} into main"
+        except git.exc.GitCommandError as e:
+            # If merge conflict, abort merge and raise error
+            try:
+                self.repo.git.merge(abort=True)
+            except git.exc.GitCommandError:
+                pass
+            error_msg = (
+                f"Merge conflict when merging {feature_branch} into main: {str(e)}"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+        except (git.exc.InvalidGitRepositoryError, ValueError) as e:
+            error_msg = f"Invalid repository or error during merge: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e

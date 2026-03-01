@@ -20,6 +20,7 @@ class Task(SQLModel, table=True):
     status: TaskStatus = Field(default=TaskStatus.DRAFT)
     worktree_path: Optional[str] = None
     branch_name: Optional[str] = None
+    feature_branch: Optional[str] = None
     test_feedback: Optional[str] = None
     test_review_attempts: int = Field(default=0)
     security_review_attempts: int = Field(default=0)
