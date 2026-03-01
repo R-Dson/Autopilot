@@ -5,7 +5,7 @@ A local orchestration system for AI-assisted software development using the Mode
 ## Setup (One-time)
 
 1. **Install Autopilot**: `uv tool install -e .`
-2. **Install Agents**: `autopilot install-agents opencode` (Options: opencode, vscode, claude)
+2. **Install Agents**: `autopilot install-agents opencode` (Options: opencode, vscode)
 3. **Connect MCP**: Add `autopilot server` to your editor's MCP settings (details below).
 
 ## Project Workflow
@@ -72,18 +72,13 @@ Any rejection resets task for full re-review. Tasks fail after 10 test rejection
 }
 ```
 
-### Claude Code
-```bash
-claude mcp add autopilot -- autopilot server
-```
-
 ---
 
 ## CLI Reference
 
 ```bash
 autopilot init                  # Initialize project state (.autopilot.db)
-autopilot install-agents {ed}   # Install agent templates (opencode, vscode, claude)
+autopilot install-agents {ed}   # Install agent templates (opencode, vscode)
 autopilot list                 # View Kanban board
 autopilot list --status ready  # View tasks ready for implementation
 autopilot update 1 --status in_progress  # Manually update task status

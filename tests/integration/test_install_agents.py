@@ -51,10 +51,9 @@ class TestEditorConfigs:
     """Tests for EDITOR_CONFIGS."""
 
     def test_has_all_editors(self):
-        """Should support opencode, vscode, claude."""
+        """Should support opencode and vscode."""
         assert "opencode" in EDITOR_CONFIGS
         assert "vscode" in EDITOR_CONFIGS
-        assert "claude" in EDITOR_CONFIGS
 
     def test_opencode_has_permission_format(self):
         """OpenCode permission format should produce permission records."""
@@ -73,11 +72,6 @@ class TestEditorConfigs:
         assert handoffs is not None
         assert "autopilot" in handoffs
         assert "Implementer" in handoffs["autopilot"]
-
-    def test_claude_no_handoffs(self):
-        """Claude editor should not have handoffs defined."""
-        handoffs = EDITOR_CONFIGS["claude"].handoffs
-        assert handoffs is None or handoffs == {}
 
 
 class TestComposeAgentFile:
@@ -111,18 +105,6 @@ class TestComposeAgentFile:
 
         assert "handoffs:" in result
         assert "Implementer" in result
-
-    def test_compose_claude_tools_format(self):
-        """Claude should use tools list format."""
-        result = compose_agent_file(
-            agent_id="implementer",
-            editor="claude",
-            core_body="# Agent content",
-            tools={"bash": True},
-            mode="subagent",
-        )
-
-        assert "bash" in result  # Tool names are lowercase in tools list
 
 
 class TestInstallAgents:

@@ -88,10 +88,6 @@ def format_tools_vscode(tools: dict) -> str:
     return "[" + ", ".join(tools.keys()) + "]"
 
 
-def format_tools_claude(tools: dict) -> str:
-    return ", ".join(tool.capitalize() for tool in tools.keys())
-
-
 # Type alias for the tools formatter function
 ToolsFormatter = Callable[[dict], str]
 
@@ -162,17 +158,6 @@ user-invokable: {user_invokable}
     send: true""",
         },
     ),
-    "claude": EditorConfig(
-        target_dir="~/.claude/agents/",
-        file_ext=".md",
-        frontmatter="""---
-description: {description}
-name: {name}
-tools: {tools_list}
-mcpServers: autopilot
----
-{body}""",
-    ),
 }
 
 
@@ -180,8 +165,6 @@ def get_editor_target_dir(editor: str) -> str:
     """Get the target directory for the editor based on OS."""
     if editor == "opencode":
         return os.path.expanduser("~/.config/opencode/agents/")
-    elif editor == "claude":
-        return os.path.expanduser("~/.claude/agents/")
     elif editor == "vscode":
         system = platform.system()
         if system == "Linux":
@@ -212,7 +195,7 @@ def compose_agent_file(
     # Format permission/tools based on editor
     if editor == "opencode" and config.permission_format:
         perm_str = config.permission_format(tools)
-    elif editor in ("vscode", "claude"):
+    elif editor == "vscode":
         perm_str = "[" + ", ".join(tools.keys()) + "]"
     else:
         perm_str = config.permission_format(tools) if config.permission_format else ""
@@ -244,31 +227,6 @@ def compose_agent_file(
             handoffs=handoffs_str,
             body=core_body,
         ).replace("\n\n---", "\n---")
-    elif editor == "claude":
-        user_invokable = agent_meta.get("user_invokable", True)
-        allowed_subagents = cast(List[str], agent_meta.get("allowed_subagents", []))
-
-        # Build tools list from provided tools
-        # Keep tool names as they are provided (often lowercase from MCP)
-        tool_names = list(tools.keys())
-
-        if allowed_subagents:
-            # Coordinator (main agent): restrict Task to specific subagents
-            agents_list_str = ", ".join(f'"{agent}"' for agent in allowed_subagents)
-            tools_str = f"Task({agents_list_str}), " + ", ".join(tool_names)
-        elif user_invokable:
-            # Regular main agent (can be invoked): include unrestricted Task
-            tools_str = "Task, " + ", ".join(tool_names)
-        else:
-            # Subagent-only (cannot spawn): exclude Task entirely
-            tools_str = ", ".join(tool_names)
-
-        return config.frontmatter.format(
-            description=description,
-            name=name,
-            tools_list=tools_str,
-            body=core_body,
-        )
     else:
         return config.frontmatter.format(
             description=description,
@@ -294,7 +252,7 @@ def init():
 @app.command()
 def install_agents(
     editor: str = typer.Argument(
-        ..., help="Editor to install agents for (opencode, vscode, claude)"
+        ..., help="Editor to install agents for (opencode, vscode)"
     ),
 ):
     """Install agent templates for the specified editor (user-wide)."""
@@ -456,64 +414,6 @@ def install_agents(
                 "bash": "true",
                 "autopilot-server/*": "true",
                 "question": "true",
-            },
-        },
-        "claude": {
-            "planner": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Write": "true",
-                "Question": "true",
-            },
-            "spec-writer": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Task": "true",
-                "Question": "true",
-            },
-            "architect": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Task": "true",
-                "Question": "true",
-            },
-            "autopilot": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Task": "true",
-                "Question": "true",
-            },
-            "implementer": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Bash": "true",
-                "Question": "true",
-            },
-            "code-reviewer": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Bash": "true",
-                "Question": "true",
-            },
-            "test-reviewer": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Bash": "true",
-                "Question": "true",
-            },
-            "security-reviewer": {
-                "Read": "true",
-                "Grep": "true",
-                "Glob": "true",
-                "Bash": "true",
-                "Question": "true",
             },
         },
     }
