@@ -1,5 +1,6 @@
 """Integration tests for MCP tools (server functions)."""
 
+import json
 import pytest
 from unittest.mock import MagicMock, patch
 from sqlmodel import Session, select
@@ -142,8 +143,12 @@ class TestWorkspaceAcquire:
 
             # Acquire workspace
             result = workspace_acquire(task_id=task_id)
+            result_data = json.loads(result)
 
-            assert "/path/to/worktree" in result
+            # Verify response structure
+            assert "task" in result_data
+            assert "feature_tasks" in result_data
+            assert result_data["task"]["worktree_path"] == "/path/to/worktree"
 
             # Verify task was updated
             session.expire_all()

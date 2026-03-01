@@ -106,6 +106,11 @@ def test_workspace_acquire_naming_collision_prevention():
         result = json.loads(result_json)
 
         # In new workflow, branch_name is None, feature_branch is set
-        assert result["branch_name"] is None
-        assert result["feature_branch"] == "feat/STABLE-102"
-        assert "STABLE-102" in result["worktree_path"]
+        # Note: result structure is now {task: {...}, feature_tasks: [...]}
+        assert result["task"]["branch_name"] is None
+        assert result["task"]["feature_branch"] == "feat/STABLE-102"
+        assert "STABLE-102" in result["task"]["worktree_path"]
+
+        # Also verify feature_tasks is present
+        assert "feature_tasks" in result
+        assert len(result["feature_tasks"]) == 1

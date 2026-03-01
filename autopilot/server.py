@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 from mcp.server.fastmcp import FastMCP
 from sqlmodel import Session, select, text
+from sqlmodel.sql.expression import col
 from .models import Task, TaskStatus
 from . import db
 from .git_manager import GitManager
@@ -160,7 +161,6 @@ def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
         jira_id = task.jira_id
         task_id_db = task.id
         assert task_id_db is not None
-        session.commit()
 
     # Prepare Git Worktree (slow operation outside the exclusive DB lock)
     try:
@@ -179,7 +179,31 @@ def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
             session.add(task)
             session.commit()
             session.refresh(task)
-            return json.dumps(task.model_dump(), indent=2)
+
+            # Fetch all tasks for this feature to provide context
+            feature_tasks = session.exec(
+                select(Task)
+                .where(Task.jira_id == task.jira_id)
+                .order_by(col(Task.sort_order))
+            ).all()
+
+            # Build response with feature context
+            response = {
+                "task": task.model_dump(),
+                "feature_tasks": [
+                    {
+                        "id": t.id,
+                        "jira_id": t.jira_id,
+                        "title": t.title,
+                        "prompt_payload": t.prompt_payload,
+                        "status": t.status.value,
+                        "sort_order": t.sort_order,
+                    }
+                    for t in feature_tasks
+                ],
+            }
+
+            return json.dumps(response, indent=2)
     except Exception as e:
         # If worktree creation fails, revert the status back to READY
         # so another agent can try again.
