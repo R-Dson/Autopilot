@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
+import git
 
 from autopilot.git_manager import GitManager
 
@@ -10,40 +11,50 @@ from autopilot.git_manager import GitManager
 class TestGitManagerInit:
     """Tests for GitManager initialization."""
 
-    def test_init_with_default_path(self, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_init_with_default_path(self, mock_repo, tmp_path):
         """GitManager should initialize with current directory."""
         with patch("pathlib.Path.resolve", return_value=tmp_path):
             gm = GitManager()
             assert gm.repo_path == tmp_path
+            mock_repo.assert_called_once_with(tmp_path)
 
-    def test_init_with_custom_path(self, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_init_with_custom_path(self, mock_repo, tmp_path):
         """GitManager should initialize with custom path."""
         gm = GitManager(repo_path=str(tmp_path))
         assert gm.repo_path == tmp_path
+        mock_repo.assert_called_once_with(tmp_path)
+
+    @patch("autopilot.git_manager.Repo")
+    def test_init_invalid_repo(self, mock_repo, tmp_path):
+        """GitManager should raise ValueError for invalid repo."""
+        mock_repo.side_effect = git.exc.InvalidGitRepositoryError("Invalid repo")
+        with pytest.raises(ValueError, match="Invalid git repository"):
+            GitManager(repo_path=str(tmp_path))
 
 
 class TestGitManagerWorktree:
     """Tests for worktree operations."""
 
-    @patch("subprocess.run")
-    def test_create_worktree_calls_git(self, mock_run, tmp_path):
-        """create_worktree should call git worktree add."""
-        mock_run.return_value = MagicMock()
-
+    @patch("autopilot.git_manager.Repo")
+    def test_create_worktree_calls_gitpython(self, mock_repo_class, tmp_path):
+        """create_worktree should call repo.git.worktree."""
+        mock_repo = mock_repo_class.return_value
         gm = GitManager(repo_path=str(tmp_path))
 
         with patch.object(gm, "_ensure_branch"):
-            _ = gm.create_worktree("PROJ-1", 1)
+            with patch.object(Path, "exists", return_value=False):
+                _ = gm.create_worktree("PROJ-1", 1)
 
-        # Should have called git worktree add
-        call_args = [str(c) for c in mock_run.call_args_list]
-        assert any("worktree" in str(c) and "add" in str(c) for c in call_args)
+        # Should have called repo.git.worktree('add', ...)
+        mock_repo.git.worktree.assert_called()
+        args, _ = mock_repo.git.worktree.call_args
+        assert "add" in args
 
-    @patch("subprocess.run")
-    def test_create_worktree_returns_path(self, mock_run, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_create_worktree_returns_path(self, mock_repo_class, tmp_path):
         """create_worktree should return the worktree path."""
-        mock_run.return_value = MagicMock()
-
         gm = GitManager(repo_path=str(tmp_path))
 
         # Mock exists to return False (worktree doesn't exist yet)
@@ -55,11 +66,10 @@ class TestGitManagerWorktree:
         assert "PROJ-1" in result
         assert "1" in result
 
-    @patch("subprocess.run")
-    def test_create_worktree_reuses_existing(self, mock_run, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_create_worktree_reuses_existing(self, mock_repo_class, tmp_path):
         """create_worktree should reuse existing worktree."""
-        mock_run.return_value = MagicMock()
-
+        mock_repo = mock_repo_class.return_value
         gm = GitManager(repo_path=str(tmp_path))
 
         # Mock exists to return True (worktree already exists)
@@ -68,72 +78,79 @@ class TestGitManagerWorktree:
 
         # Should return path without creating new worktree
         assert "PROJ-1" in result
-        # Should NOT call _ensure_branch if worktree exists
-        mock_run.assert_not_called()
+        # Should NOT call repo.git.worktree or _ensure_branch if worktree exists
+        mock_repo.git.worktree.assert_not_called()
 
-    @patch("subprocess.run")
-    def test_ensure_branch_creates_if_missing(self, mock_run, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_ensure_branch_creates_if_missing(self, mock_repo_class, tmp_path):
         """_ensure_branch should create branch if it doesn't exist."""
-        # First call fails (branch doesn't exist), second succeeds
-        mock_run.side_effect = [
-            MagicMock(returncode=1),  # rev-parse fails
-            MagicMock(returncode=0),  # branch create succeeds
-        ]
+        mock_repo = mock_repo_class.return_value
+        mock_repo.heads = {}  # Branch doesn't exist
 
         gm = GitManager(repo_path=str(tmp_path))
         gm._ensure_branch("feat/PROJ-1")
 
-        # Should have called git branch
-        call_args = [str(c) for c in mock_run.call_args_list]
-        assert any("branch" in str(c) for c in call_args)
+        # Should have called create_head
+        mock_repo.create_head.assert_called_once_with("feat/PROJ-1")
 
-    @pytest.mark.skip(reason="Subprocess mocking not working correctly in this context")
-    @patch("autopilot.git_manager.subprocess")
-    def test_commit_task_calls_git_add_and_commit(self, mock_subprocess, tmp_path):
-        """commit_task should add and commit changes."""
-        mock_subprocess.run.return_value = MagicMock()
+    @patch("autopilot.git_manager.Repo")
+    def test_commit_task_calls_gitpython(self, mock_repo_class, tmp_path):
+        """commit_task should add and commit changes using GitPython."""
+        # We need to mock the Repo(worktree_path) call inside commit_task
+        with patch("autopilot.git_manager.Repo") as mock_repo_init:
+            mock_wt_repo = MagicMock()
+            mock_repo_init.side_effect = [
+                MagicMock(),
+                mock_wt_repo,
+            ]  # First for gm.__init__, second for commit_task
 
-        gm = GitManager(repo_path=str(tmp_path))
-        gm.commit_task("/fake/path", "PROJ-1", "Fix bug", 1)
+            gm = GitManager(repo_path=str(tmp_path))
+            gm.commit_task("/fake/path", "PROJ-1", "Fix bug", 1)
 
-        call_args = [str(c) for c in mock_subprocess.run.call_args_list]
-        assert any("git add" in str(c) for c in call_args)
-        assert any("git commit" in str(c) for c in call_args)
+            # Should have called git add and commit on the worktree repo
+            mock_wt_repo.git.add.assert_called_once_with(A=True)
+            mock_wt_repo.index.commit.assert_called()
 
-    @patch("subprocess.run")
-    def test_merge_task_checkouts_and_merges(self, mock_run, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_merge_task_checkouts_and_merges(self, mock_repo_class, tmp_path):
         """merge_task should checkout and merge."""
-        mock_run.return_value = MagicMock()
+        with patch("autopilot.git_manager.Repo") as mock_repo_init:
+            mock_wt_repo = MagicMock()
+            mock_repo_init.side_effect = [MagicMock(), mock_wt_repo]
 
-        gm = GitManager(repo_path=str(tmp_path))
-        gm.merge_task("/fake/path", "feat/proj-1/1", "main")
+            gm = GitManager(repo_path=str(tmp_path))
+            gm.merge_task("/fake/path", "feat/proj-1-T1", "main")
 
-        call_args = [str(c) for c in mock_run.call_args_list]
-        assert any("checkout" in str(c) for c in call_args)
-        assert any("merge" in str(c) for c in call_args)
+            # Should have called checkout and merge
+            mock_wt_repo.git.checkout.assert_called_with("main")
+            mock_wt_repo.git.merge.assert_called()
 
-    @patch("subprocess.run")
-    def test_cleanup_worktree_removes_worktree(self, mock_run, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_cleanup_worktree_removes_worktree(self, mock_repo_class, tmp_path):
         """cleanup_worktree should remove the worktree."""
-        mock_run.return_value = MagicMock()
-
+        mock_repo = mock_repo_class.return_value
         gm = GitManager(repo_path=str(tmp_path))
         gm.cleanup_worktree("/fake/path")
 
-        call_args = [str(c) for c in mock_run.call_args_list]
-        assert any("worktree" in str(c) and "remove" in str(c) for c in call_args)
+        # Should have called repo.git.worktree('remove', ...)
+        mock_repo.git.worktree.assert_called()
+        args, _ = mock_repo.git.worktree.call_args
+        assert "remove" in args
 
 
 class TestGitManagerPush:
     """Tests for push operations."""
 
-    @patch("subprocess.run")
-    def test_push_branch_calls_git_push(self, mock_run, tmp_path):
+    @patch("autopilot.git_manager.Repo")
+    def test_push_branch_calls_git_push(self, mock_repo_class, tmp_path):
         """push_branch should call git push."""
-        mock_run.return_value = MagicMock()
+        mock_repo = mock_repo_class.return_value
+        mock_remote = MagicMock()
+        mock_repo.remote.return_value = mock_remote
 
         gm = GitManager(repo_path=str(tmp_path))
         gm.push_branch("PROJ-1")
 
-        call_args = [str(c) for c in mock_run.call_args_list]
-        assert any("push" in str(c) for c in call_args)
+        # Should have called push on the remote
+        mock_repo.remote.assert_called_once_with(name="origin")
+        mock_remote.push.assert_called_once()
