@@ -1,48 +1,41 @@
-import os
 import pytest
-from sqlmodel import Session
-
+from sqlmodel import SQLModel, create_engine, Session
 from autopilot.models import Task, TaskStatus
-from autopilot import db as db_module
+import autopilot.db
 
 
 @pytest.fixture(autouse=True)
-def reset_db():
-    """Reset database engine before each test for isolation."""
-    original_cwd = os.getcwd()
-    db_module.reset_engine()
-    yield
-    db_module.reset_engine()
-    os.chdir(original_cwd)
+def mock_db(tmp_path, monkeypatch):
+    """Use a temporary SQLite database for tests."""
+    from autopilot.models import Task as _Task  # noqa: F401
+
+    db_path = tmp_path / "test_autopilot.db"
+
+    test_engine = create_engine(f"sqlite:///{db_path}")
+
+    # Patch the engine in the db module so all other modules use it
+    monkeypatch.setattr(autopilot.db, "engine", test_engine)
+
+    # Initialize the test database
+    SQLModel.metadata.create_all(test_engine)
+
+    yield test_engine
 
 
 @pytest.fixture
-def tmp_project(tmp_path):
-    """Creates a temporary project directory with .autopilot/ initialized."""
+def session(mock_db):
+    """Provides a SQLModel session for testing."""
+    with Session(mock_db) as session:
+        yield session
+
+
+@pytest.fixture
+def tmp_project(tmp_path, monkeypatch):
+    """Creates a temporary project directory."""
     project_dir = tmp_path / "test_project"
     project_dir.mkdir()
-
-    autopilot_dir = project_dir / ".autopilot"
-    autopilot_dir.mkdir()
-
-    # Change to project directory so database is created there
-    os.chdir(project_dir)
-
-    # Reset engine to use new project directory
-    db_module.reset_engine()
-
-    # Initialize database
-    db_module.init_db()
-
-    yield project_dir
-
-
-@pytest.fixture
-def session(tmp_project):
-    """Provides a database session for tests."""
-    with Session(db_module.get_engine()) as ses:
-        yield ses
-        ses.rollback()
+    monkeypatch.chdir(project_dir)
+    return project_dir
 
 
 @pytest.fixture
@@ -52,7 +45,7 @@ def sample_task(session):
         jira_id="TEST-1",
         title="Test Task",
         prompt_payload="Implement feature X",
-        status=TaskStatus.DRAFT,
+        status=TaskStatus.READY,
         sort_order=1,
     )
     session.add(task)

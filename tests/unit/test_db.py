@@ -1,45 +1,55 @@
-"""Unit tests for database module."""
-
+import os
+from autopilot import db
 from sqlmodel import Session, select
-
 from autopilot.models import Task
-from autopilot import db as db_module
 
 
-class TestInitDb:
-    """Tests for init_db function."""
+def test_init_db_correctly_determines_path(tmp_path, monkeypatch):
+    """Verify that init_db() correctly determines path and initializes schema."""
+    # Setup temp project root
+    project_root = tmp_path / "project"
+    project_root.mkdir()
 
-    def test_init_db_creates_autopilot_directory(self, tmp_path, monkeypatch):
-        """init_db should create .autopilot directory."""
-        monkeypatch.chdir(tmp_path)
-        db_module.reset_engine()
+    # Configure env var for project root
+    monkeypatch.setattr(
+        os, "environ", {**os.environ, "AUTOPILOT_ROOT": str(project_root)}
+    )
 
-        db_module.init_db()
+    # Reset engine to pick up new root
+    db.reset_engine()
 
-        assert (tmp_path / ".autopilot").exists()
-        assert (tmp_path / ".autopilot" / "tasks.db").exists()
+    expected_db_path = project_root / ".autopilot.db"
+    assert db.DB_PATH == expected_db_path
+    assert not expected_db_path.exists()
 
-    def test_init_db_creates_tables(self, tmp_path, monkeypatch):
-        """init_db should create all tables."""
-        monkeypatch.chdir(tmp_path)
-        db_module.reset_engine()
+    # Run init_db - this uses the REAL engine (pointing to temp path)
+    db.init_db()
 
-        db_module.init_db()
+    # Verify file exists
+    assert expected_db_path.exists()
 
-        # Should be able to query (table exists)
-        with Session(db_module.get_engine()) as session:
-            # This will fail if tables don't exist
-            result = session.exec(select(Task)).all()
-            assert result == []
+    # Verify schema is initialized by trying to use it with the module's engine
+    with Session(db.engine) as session:
+        task = Task(jira_id="TEST", title="Test", prompt_payload="Test")
+        session.add(task)
+        session.commit()
+
+        # Verify we can read it back
+        saved_task = session.exec(select(Task)).first()
+        assert saved_task is not None
+        assert saved_task.jira_id == "TEST"
 
 
-class TestGetSession:
-    """Tests for get_session function."""
+def test_init_db_is_idempotent(tmp_path, monkeypatch):
+    """Verify that init_db() can be called multiple times without error."""
+    project_root = tmp_path / "project_idempotent"
+    project_root.mkdir()
+    monkeypatch.setattr(
+        os, "environ", {**os.environ, "AUTOPILOT_ROOT": str(project_root)}
+    )
+    db.reset_engine()
 
-    def test_get_session_returns_session(self, tmp_path, monkeypatch):
-        """get_session should return a Session context manager."""
-        monkeypatch.chdir(tmp_path)
-        db_module.init_db()
+    db.init_db()
+    db.init_db()  # Should not raise
 
-        with db_module.get_session() as session:
-            assert isinstance(session, Session)
+    assert (project_root / ".autopilot.db").exists()

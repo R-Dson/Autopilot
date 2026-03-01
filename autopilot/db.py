@@ -1,37 +1,37 @@
 import os
-from sqlmodel import SQLModel, Session, create_engine
-from typing import Optional, Any
+from pathlib import Path
+from sqlmodel import SQLModel, create_engine, Session
 
-DB_PATH = ".autopilot/tasks.db"
-_engine: Optional[Any] = None
+# DB setup
+# Use a hidden database file in the project root for simplicity and cleanliness.
+BASE_DIR = Path(
+    os.environ.get("AUTOPILOT_ROOT", Path(__file__).parent.parent.resolve())
+)
+DB_PATH = BASE_DIR / ".autopilot.db"
+DB_URL = f"sqlite:///{DB_PATH}"
 
-
-def get_engine():
-    """Get database engine with absolute path to current working directory."""
-    global _engine
-    if _engine is None:
-        abs_db_path = os.path.abspath(DB_PATH)
-        sqlite_url = f"sqlite:///{abs_db_path}"
-        _engine = create_engine(sqlite_url)
-    return _engine
+engine = create_engine(DB_URL, echo=False, connect_args={"check_same_thread": False})
 
 
 def reset_engine():
-    """Reset the cached engine. Useful for tests."""
-    global _engine
-    if _engine is not None:
-        _engine.dispose()
-    _engine = None
+    """Reset the engine, e.g. for testing with a different root."""
+    global BASE_DIR, DB_PATH, DB_URL, engine
+    BASE_DIR = Path(
+        os.environ.get("AUTOPILOT_ROOT", Path(__file__).parent.parent.resolve())
+    )
+    DB_PATH = BASE_DIR / ".autopilot.db"
+    DB_URL = f"sqlite:///{DB_PATH}"
+    engine = create_engine(
+        DB_URL, echo=False, connect_args={"check_same_thread": False}
+    )
 
 
 def init_db():
-    os.makedirs(".autopilot", exist_ok=True)
-    SQLModel.metadata.create_all(get_engine())
+    from .models import Task  # noqa: F401
+
+    SQLModel.metadata.create_all(engine)
 
 
 def get_session():
-    return Session(get_engine())
-
-
-# For backward compatibility
-engine = get_engine()
+    with Session(engine) as session:
+        yield session

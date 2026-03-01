@@ -1,18 +1,30 @@
-import subprocess
+import git
+from git import Repo
 from pathlib import Path
+import logging
+from typing import List, Optional, Dict
+
+from .security import validate_jira_id
+
+logger = logging.getLogger(__name__)
 
 
 class GitManager:
     def __init__(self, repo_path: str = "."):
         self.repo_path = Path(repo_path).resolve()
+        try:
+            self.repo = Repo(self.repo_path)
+        except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError) as e:
+            raise ValueError(f"Invalid git repository at: {self.repo_path}") from e
 
     def create_worktree(self, jira_id: str, task_id: int) -> str:
         """
         Creates a git worktree for the specific task.
-        Branch: feat/{jira_id}/{task_id}
+        Branch: feat/{jira_id}-T{task_id}
         Worktree: {repo_name}-{jira_id}-{task_id}
         """
-        task_branch = f"feat/{jira_id}/{task_id}"
+        validate_jira_id(jira_id)
+        task_branch = f"feat/{jira_id}-T{task_id}"
         base_branch = f"feat/{jira_id}"  # The main feature branch
         worktree_path = (
             self.repo_path.parent / f"{self.repo_path.name}-{jira_id}-{task_id}"
@@ -20,6 +32,7 @@ class GitManager:
 
         # Check if worktree already exists - return early if so
         if worktree_path.exists():
+            logger.info(f"Worktree already exists: {worktree_path}")
             return str(worktree_path.resolve())
 
         # Ensure base feature branch exists
@@ -28,94 +41,174 @@ class GitManager:
         # Create worktree
         try:
             # Try to create new branch off base feature branch
-            subprocess.run(
-                [
-                    "git",
-                    "worktree",
-                    "add",
-                    str(worktree_path),
-                    "-b",
-                    task_branch,
-                    base_branch,
-                ],
-                cwd=str(self.repo_path),
-                check=True,
-                capture_output=True,
+            self.repo.git.worktree(
+                "add", str(worktree_path), "-b", task_branch, base_branch
             )
-        except subprocess.CalledProcessError:
+            logger.info(f"Created new worktree: {worktree_path}")
+        except git.exc.GitCommandError:
             # If branch already exists, just checkout
-            subprocess.run(
-                ["git", "worktree", "add", str(worktree_path), task_branch],
-                cwd=str(self.repo_path),
-                check=True,
-                capture_output=True,
-            )
+            try:
+                self.repo.git.worktree("add", str(worktree_path), task_branch)
+                logger.info(f"Created worktree from existing branch: {worktree_path}")
+            except git.exc.GitCommandError as e:
+                error_msg = f"Failed to create worktree at {worktree_path}: {str(e)}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg) from e
 
         return str(worktree_path.resolve())
 
     def _ensure_branch(self, branch_name: str):
         """Ensures a branch exists (creates from current HEAD if needed)."""
+        if branch_name in self.repo.heads:
+            logger.info(f"Branch exists: {branch_name}")
+            return
+
         try:
-            subprocess.run(
-                ["git", "rev-parse", "--verify", branch_name],
-                cwd=str(self.repo_path),
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            subprocess.run(
-                ["git", "branch", branch_name],
-                cwd=str(self.repo_path),
-                check=True,
-            )
+            self.repo.create_head(branch_name)
+            logger.info(f"Created branch: {branch_name}")
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to create branch {branch_name}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def commit_task(
         self, worktree_path: str, jira_id: str, task_title: str, task_id: int
     ):
         """Creates an atomic commit for a completed task."""
-        subprocess.run(["git", "add", "."], cwd=worktree_path, check=True)
-        message = f"task({jira_id}): {task_title} [T-{task_id}]"
-        subprocess.run(["git", "commit", "-m", message], cwd=worktree_path, check=True)
+        try:
+            wt_repo = Repo(worktree_path)
+            wt_repo.git.add(A=True)  # Equivalent to git add .
+            message = f"task({jira_id}): {task_title} [T-{task_id}]"
+            wt_repo.index.commit(message)
+            logger.info(f"Committed task {task_id} in worktree: {worktree_path}")
+        except (git.exc.InvalidGitRepositoryError, git.exc.GitCommandError) as e:
+            error_msg = f"Failed to commit task {task_id} at {worktree_path}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def push_branch(self, jira_id: str):
         """Pushes the feature branch to remote."""
+        validate_jira_id(jira_id)
         branch_name = f"feat/{jira_id}"
-        subprocess.run(
-            ["git", "push", "-u", "origin", branch_name],
-            cwd=str(self.repo_path),
-            check=True,
-            capture_output=True,
-        )
+        try:
+            origin = self.repo.remote(name="origin")
+            origin.push(refspec=f"{branch_name}:{branch_name}", set_upstream=True)
+            logger.info(f"Pushed branch: {branch_name}")
+        except (git.exc.GitCommandError, ValueError) as e:
+            error_msg = f"Failed to push branch {branch_name}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def merge_task(self, worktree_path: str, task_branch: str, target_branch: str):
         """Merges the task branch into the target branch."""
-        # 1. Fetch latest state
-        subprocess.run(["git", "fetch", "origin"], cwd=worktree_path, check=False)
-
-        # 2. Checkout target branch in worktree
-        subprocess.run(
-            ["git", "checkout", target_branch], cwd=worktree_path, check=True
-        )
-
-        # 3. Merge task branch
+        wt_repo = None
         try:
-            subprocess.run(
-                ["git", "merge", task_branch, "--no-ff", "-m", f"Merge {task_branch}"],
-                cwd=worktree_path,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
+            wt_repo = Repo(worktree_path)
+            # 1. Fetch latest state
+            try:
+                wt_repo.remote(name="origin").fetch()
+            except (git.exc.GitCommandError, ValueError):
+                pass  # Ignore fetch errors if origin not set up correctly in test
+
+            # 2. Checkout target branch in worktree
+            wt_repo.git.checkout(target_branch)
+
+            # 3. Merge task branch
+            wt_repo.git.merge(task_branch, no_ff=True, m=f"Merge {task_branch}")
+            logger.info(f"Merged {task_branch} into {target_branch}")
+        except git.exc.GitCommandError as e:
             # If merge conflict, abort merge and raise error
-            subprocess.run(["git", "merge", "--abort"], cwd=worktree_path, check=False)
-            raise RuntimeError(
-                f"Merge conflict: {e.stderr.decode() if e.stderr else str(e)}"
-            )
+            if wt_repo:
+                try:
+                    wt_repo.git.merge(abort=True)
+                except git.exc.GitCommandError:
+                    pass
+            error_msg = f"Merge conflict or error: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+        except (git.exc.InvalidGitRepositoryError, ValueError) as e:
+            error_msg = f"Invalid repository or configuration for merge: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def cleanup_worktree(self, worktree_path: str):
         """Removes the worktree and cleans up."""
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", worktree_path],
-            cwd=str(self.repo_path),
-            check=True,
-        )
+        try:
+            self.repo.git.worktree("remove", "--force", worktree_path)
+            logger.info(f"Cleaned up worktree: {worktree_path}")
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to remove worktree {worktree_path}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def get_status(self) -> Dict[str, List[str] | str]:
+        """Returns the current status of the repository."""
+        try:
+            # Staged changes (diff between HEAD and Index)
+            # Handle case where HEAD might not exist (new repo)
+            try:
+                staged = [
+                    item.a_path for item in self.repo.index.diff("HEAD") if item.a_path
+                ]
+            except (git.exc.BadName, git.exc.GitCommandError):
+                # Fallback for new repo: use git command to get staged files
+                try:
+                    staged_output = self.repo.git.diff("--cached", "--name-only")
+                    staged = staged_output.splitlines() if staged_output else []
+                except git.exc.GitCommandError:
+                    staged = []
+
+            # Unstaged changes (diff between Index and Worktree)
+            unstaged = [
+                item.a_path for item in self.repo.index.diff(None) if item.a_path
+            ]
+            # Untracked files
+            untracked = self.repo.untracked_files
+
+            branch = "DETACHED"
+            try:
+                branch = self.repo.active_branch.name
+            except (TypeError, git.exc.GitCommandError):
+                pass  # HEAD is detached or doesn't exist yet
+
+            return {
+                "staged": sorted(list(set(staged))),
+                "unstaged": sorted(list(set(unstaged))),
+                "untracked": sorted(untracked),
+                "branch": branch,
+            }
+        except Exception as e:
+            error_msg = f"Failed to get git status: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def get_diff(self, paths: Optional[List[str]] = None) -> str:
+        """Returns the diff for the specified paths or the entire worktree."""
+        try:
+            if paths:
+                return self.repo.git.diff("--", *paths)
+            return self.repo.git.diff()
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to get git diff: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def add(self, files: List[str]):
+        """Stages specific files."""
+        try:
+            self.repo.index.add(files)
+            logger.info(f"Staged files: {files}")
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to stage files {files}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def restore(self, files: List[str]):
+        """Discards changes in the specified files."""
+        try:
+            self.repo.git.restore("--", *files)
+            logger.info(f"Restored files: {files}")
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to restore files {files}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e

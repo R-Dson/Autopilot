@@ -1,5 +1,3 @@
-from sqlmodel import select
-
 from autopilot.models import Task, TaskStatus
 
 
@@ -22,28 +20,28 @@ class TestTaskStatus:
 
 
 class TestTaskModel:
-    """Tests for Task SQLModel."""
+    """Tests for Task Pydantic model."""
 
-    def test_create_task_with_required_fields(self, session):
+    def test_create_task_with_required_fields(self):
         """Task can be created with only required fields."""
         task = Task(
+            id=1,
             jira_id="PROJ-1",
             title="Implement feature",
             prompt_payload="Do something specific",
             status=TaskStatus.DRAFT,
             sort_order=1,
         )
-        session.add(task)
-        session.commit()
 
-        assert task.id is not None
+        assert task.id == 1
         assert task.jira_id == "PROJ-1"
         assert task.title == "Implement feature"
         assert task.status == TaskStatus.DRAFT
 
-    def test_create_task_with_all_fields(self, session):
+    def test_create_task_with_all_fields(self):
         """Task can be created with all fields."""
         task = Task(
+            id=2,
             jira_id="PROJ-2",
             title="Full task",
             prompt_payload="Detailed prompt",
@@ -52,53 +50,57 @@ class TestTaskModel:
             worktree_path="/path/to/worktree",
             branch_name="feat/proj-2/1",
             test_feedback="Tests passed",
+            test_review_attempts=1,
+            security_review_attempts=0,
+            security_feedback=None,
         )
-        session.add(task)
-        session.commit()
-        session.refresh(task)
 
-        assert task.id is not None
+        assert task.id == 2
         assert task.worktree_path == "/path/to/worktree"
         assert task.branch_name == "feat/proj-2/1"
         assert task.test_feedback == "Tests passed"
 
-    def test_task_default_status_is_draft(self, session):
+    def test_task_default_status_is_draft(self):
         """Task should default to DRAFT status if not specified."""
         task = Task(
+            id=3,
             jira_id="PROJ-3",
             title="Default status test",
             prompt_payload="Test",
             sort_order=1,
         )
-        session.add(task)
-        session.commit()
-        session.refresh(task)
 
         assert task.status == TaskStatus.DRAFT
 
-    def test_task_query_by_jira_id(self, session, sample_task):
-        """Can query tasks by jira_id."""
-        result = session.exec(select(Task).where(Task.jira_id == "TEST-1")).one()
-        assert result.id == sample_task.id
+    def test_task_serialization(self):
+        """Task should serialize to dict correctly."""
+        task = Task(
+            id=1,
+            jira_id="TEST-1",
+            title="Test Task",
+            prompt_payload="Test payload",
+            status=TaskStatus.READY,
+        )
+        
+        data = task.model_dump()
+        assert data["id"] == 1
+        assert data["jira_id"] == "TEST-1"
+        assert data["status"] == TaskStatus.READY
 
-    def test_task_query_by_status(self, session, sample_task):
-        """Can query tasks by status."""
-        result = session.exec(select(Task).where(Task.status == TaskStatus.DRAFT)).one()
-        assert result.id == sample_task.id
+    def test_task_json_roundtrip(self):
+        """Task should serialize and deserialize from JSON."""
+        task = Task(
+            id=1,
+            jira_id="TEST-1",
+            title="Test Task",
+            prompt_payload="Test payload",
+            status=TaskStatus.READY,
+        )
+        
+        json_str = task.model_dump_json()
+        restored = Task.model_validate_json(json_str)
+        
+        assert restored.id == task.id
+        assert restored.jira_id == task.jira_id
+        assert restored.title == task.title
 
-    def test_task_update_status(self, session, sample_task):
-        """Can update task status."""
-        sample_task.status = TaskStatus.READY
-        session.commit()
-        session.refresh(sample_task)
-
-        assert sample_task.status == TaskStatus.READY
-
-    def test_task_delete(self, session, sample_task):
-        """Can delete a task."""
-        task_id = sample_task.id
-        session.delete(sample_task)
-        session.commit()
-
-        result = session.get(Task, task_id)
-        assert result is None

@@ -22,7 +22,7 @@ class TestAgentRegistry:
             "architect",
             "autopilot",
             "implementer",
-            "reviewer",
+            "code-reviewer",
             "test-reviewer",
             "security-reviewer",
         }
@@ -44,7 +44,7 @@ class TestAgentRegistry:
         """Worker agents should be subagent mode."""
         assert AGENT_REGISTRY["architect"]["mode"] == "subagent"
         assert AGENT_REGISTRY["implementer"]["mode"] == "subagent"
-        assert AGENT_REGISTRY["reviewer"]["mode"] == "subagent"
+        assert AGENT_REGISTRY["code-reviewer"]["mode"] == "subagent"
 
 
 class TestEditorConfigs:
