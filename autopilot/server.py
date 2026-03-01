@@ -404,3 +404,45 @@ def workspace_cleanup(
             )
         except Exception as e:
             return f"Error during cleanup: {str(e)}"
+
+
+@mcp.tool()
+def git_status(repo_root: Optional[str] = None) -> dict:
+    """Returns the current status of the repository."""
+    try:
+        git_manager = _get_git_manager(repo_root)
+        return git_manager.get_status()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def git_diff(repo_root: Optional[str] = None, paths: Optional[List[str]] = None) -> str:
+    """Returns the diff for the specified paths or the entire worktree."""
+    try:
+        git_manager = _get_git_manager(repo_root)
+        return git_manager.get_diff(paths)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def git_add(files: List[str], repo_root: Optional[str] = None) -> str:
+    """Stages specific files."""
+    try:
+        git_manager = _get_git_manager(repo_root)
+        git_manager.add(files)
+        return f"Successfully staged {files}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def git_restore(files: List[str], repo_root: Optional[str] = None) -> str:
+    """Discards changes in the specified files."""
+    try:
+        git_manager = _get_git_manager(repo_root)
+        git_manager.restore(files)
+        return f"Successfully restored {files}"
+    except Exception as e:
+        return f"Error: {str(e)}"

@@ -2,6 +2,7 @@ import git
 from git import Repo
 from pathlib import Path
 import logging
+from typing import List, Optional, Dict
 
 from .security import validate_jira_id
 
@@ -137,5 +138,77 @@ class GitManager:
             logger.info(f"Cleaned up worktree: {worktree_path}")
         except git.exc.GitCommandError as e:
             error_msg = f"Failed to remove worktree {worktree_path}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def get_status(self) -> Dict[str, List[str] | str]:
+        """Returns the current status of the repository."""
+        try:
+            # Staged changes (diff between HEAD and Index)
+            # Handle case where HEAD might not exist (new repo)
+            try:
+                staged = [
+                    item.a_path for item in self.repo.index.diff("HEAD") if item.a_path
+                ]
+            except (git.exc.BadName, git.exc.GitCommandError):
+                # Fallback for new repo: use git command to get staged files
+                try:
+                    staged_output = self.repo.git.diff("--cached", "--name-only")
+                    staged = staged_output.splitlines() if staged_output else []
+                except git.exc.GitCommandError:
+                    staged = []
+
+            # Unstaged changes (diff between Index and Worktree)
+            unstaged = [
+                item.a_path for item in self.repo.index.diff(None) if item.a_path
+            ]
+            # Untracked files
+            untracked = self.repo.untracked_files
+
+            branch = "DETACHED"
+            try:
+                branch = self.repo.active_branch.name
+            except (TypeError, git.exc.GitCommandError):
+                pass  # HEAD is detached or doesn't exist yet
+
+            return {
+                "staged": sorted(list(set(staged))),
+                "unstaged": sorted(list(set(unstaged))),
+                "untracked": sorted(untracked),
+                "branch": branch,
+            }
+        except Exception as e:
+            error_msg = f"Failed to get git status: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def get_diff(self, paths: Optional[List[str]] = None) -> str:
+        """Returns the diff for the specified paths or the entire worktree."""
+        try:
+            if paths:
+                return self.repo.git.diff(paths)
+            return self.repo.git.diff()
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to get git diff: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def add(self, files: List[str]):
+        """Stages specific files."""
+        try:
+            self.repo.index.add(files)
+            logger.info(f"Staged files: {files}")
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to stage files {files}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def restore(self, files: List[str]):
+        """Discards changes in the specified files."""
+        try:
+            self.repo.git.restore(files)
+            logger.info(f"Restored files: {files}")
+        except git.exc.GitCommandError as e:
+            error_msg = f"Failed to restore files {files}: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
