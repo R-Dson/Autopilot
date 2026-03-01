@@ -24,4 +24,4 @@ class Task(SQLModel, table=True):
     test_review_attempts: int = Field(default=0)
     security_review_attempts: int = Field(default=0)
     security_feedback: Optional[str] = None
-    sort_order: int = 0
+    sort_order: int = Field(default=0)

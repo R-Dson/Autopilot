@@ -1,64 +1,64 @@
 import typer
 import os
 import platform
-from typing import Callable, Optional
-from sqlmodel import select, Session
+from typing import Callable, Optional, List, cast
 from importlib import resources
 from .server import mcp
-from .db import init_db, engine
+from . import db
 from .models import Task, TaskStatus
+from sqlmodel import Session, select
 
 app = typer.Typer(help="Autopilot - Architect-First AI Orchestrator")
 
 AGENT_REGISTRY = {
-    "Spec Writer": {
+    "spec-writer": {
         "name": "Spec Writer",
         "description": "Creates and refines feature specifications",
         "mode": "primary",
         "user_invokable": True,
-        "allowed_subagents": ["Architect"],
+        "allowed_subagents": ["architect"],
     },
-    "Architect": {
+    "architect": {
         "name": "Architect",
         "description": "Translates specs into atomic tasks for Autopilot",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "Autopilot": {
+    "autopilot": {
         "name": "Autopilot",
         "description": "Runs the automation loop - coordinates Implementer and Code Reviewer agents",
         "mode": "primary",
         "user_invokable": True,
         "allowed_subagents": [
-            "Implementer",
-            "Test Reviewer",
-            "Code Reviewer",
-            "Security Reviewer",
+            "implementer",
+            "test-reviewer",
+            "code-reviewer",
+            "security-reviewer",
         ],
     },
-    "Implementer": {
+    "implementer": {
         "name": "Implementer",
         "description": "Implements atomic tasks from the Autopilot Kanban board",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "Code Reviewer": {
+    "code-reviewer": {
         "name": "Code Reviewer",
         "description": "Reviews and approves code changes",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "Test Reviewer": {
+    "test-reviewer": {
         "name": "Test Reviewer",
         "description": "Reviews test coverage and quality - verifies tests pass and cover real code",
         "mode": "subagent",
         "user_invokable": False,
         "allowed_subagents": [],
     },
-    "Security Reviewer": {
+    "security-reviewer": {
         "name": "Security Reviewer",
         "description": "Reviews code for security vulnerabilities with focus on OWASP Top 10, Zero Trust, and AI/ML security",
         "mode": "subagent",
@@ -128,15 +128,19 @@ user-invokable: {user_invokable}
 ---
 {body}""",
         handoffs={
-            "Autopilot": "",
-            "Implementer": "",
-            "Code Reviewer": "",
-            "Test Reviewer": "",
-            "Security Reviewer": "",
-            "Architect": "",
-            "Spec Writer": """handoffs:
+            "autopilot": """handoffs:
+  - label: Implementer: Implement Task
+    agent: implementer
+    prompt: Please implement task {task_id}.
+    send: true""",
+            "implementer": "",
+            "code-reviewer": "",
+            "test-reviewer": "",
+            "security-reviewer": "",
+            "architect": "",
+            "spec-writer": """handoffs:
   - label: Implement Specification
-    agent: Autopilot
+    agent: autopilot
     prompt: Please implement the feature described in this specification.
     send: true""",
         },
@@ -200,7 +204,7 @@ def compose_agent_file(
         handoffs = config.handoffs.get(agent_id, "")
         user_invokable = agent_meta.get("user_invokable", True)
 
-        allowed_subagents = agent_meta.get("allowed_subagents", [])
+        allowed_subagents = cast(List[str], agent_meta.get("allowed_subagents", []))
 
         # Format agents list (only include if non-empty)
         if allowed_subagents:
@@ -225,21 +229,22 @@ def compose_agent_file(
         ).replace("\n\n---", "\n---")
     elif editor == "claude":
         user_invokable = agent_meta.get("user_invokable", True)
-        allowed_subagents = agent_meta.get("allowed_subagents", [])
+        allowed_subagents = cast(List[str], agent_meta.get("allowed_subagents", []))
 
-        # Build tools list
-        base_tools = ["Read", "Grep", "Glob", "Question"]
+        # Build tools list from provided tools
+        # Keep tool names as they are provided (often lowercase from MCP)
+        tool_names = list(tools.keys())
 
         if allowed_subagents:
             # Coordinator (main agent): restrict Task to specific subagents
             agents_list_str = ", ".join(f'"{agent}"' for agent in allowed_subagents)
-            tools_str = f"Task({agents_list_str}), " + ", ".join(base_tools)
+            tools_str = f"Task({agents_list_str}), " + ", ".join(tool_names)
         elif user_invokable:
             # Regular main agent (can be invoked): include unrestricted Task
-            tools_str = "Task, " + ", ".join(base_tools)
+            tools_str = "Task, " + ", ".join(tool_names)
         else:
             # Subagent-only (cannot spawn): exclude Task entirely
-            tools_str = ", ".join(base_tools)
+            tools_str = ", ".join(tool_names)
 
         return config.frontmatter.format(
             description=description,
@@ -264,12 +269,9 @@ def server():
 
 @app.command()
 def init():
-    """Initialize the Autopilot project state (SQLite database)."""
-    if os.path.exists(".autopilot/tasks.db"):
-        print("Autopilot project already initialized (database exists).")
-    else:
-        init_db()
-        print("Autopilot project state initialized at .autopilot/tasks.db")
+    """Initialize the Autopilot project state (SQLite storage)."""
+    db.init_db()
+    print("Autopilot project state initialized (SQLite database).")
 
 
 @app.command()
@@ -296,7 +298,7 @@ def install_agents(
     # These override the default tools to enforce workflow
     agent_permissions = {
         "opencode": {
-            "Spec Writer": {
+            "spec-writer": {
                 "read": "allow",
                 "edit": "allow",
                 "write": "allow",
@@ -305,7 +307,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "Architect": {
+            "architect": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -314,7 +316,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "Autopilot": {
+            "autopilot": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -323,7 +325,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "Implementer": {
+            "implementer": {
                 "read": "allow",
                 "edit": "allow",
                 "write": "allow",
@@ -332,7 +334,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "Code Reviewer": {
+            "code-reviewer": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -341,7 +343,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "Test Reviewer": {
+            "test-reviewer": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -350,7 +352,7 @@ def install_agents(
                 "question": "allow",
                 "mcp": "allow",
             },
-            "Security Reviewer": {
+            "security-reviewer": {
                 "read": "allow",
                 "edit": "deny",
                 "write": "deny",
@@ -361,7 +363,7 @@ def install_agents(
             },
         },
         "vscode": {
-            "Spec Writer": {
+            "spec-writer": {
                 "vscode": "true",
                 "execute": "true",
                 "read": "true",
@@ -372,21 +374,21 @@ def install_agents(
                 "todo": "true",
                 "autopilot-server/*": "true",
             },
-            "Architect": {
+            "architect": {
                 "read": "true",
                 "search": "true",
                 "autopilot-server/*": "true",
                 "task": "true",
                 "question": "true",
             },
-            "Autopilot": {
+            "autopilot": {
                 "vscode": "true",
                 "agent": "true",
                 "web": "true",
                 "autopilot-server/*": "true",
                 "todo": "true",
             },
-            "Implementer": {
+            "implementer": {
                 "vscode": "true",
                 "execute": "true",
                 "read": "true",
@@ -398,7 +400,7 @@ def install_agents(
                 "bash": "true",
                 "autopilot-server/*": "true",
             },
-            "Code Reviewer": {
+            "code-reviewer": {
                 "read": "true",
                 "search": "true",
                 "execute": "true",
@@ -406,7 +408,7 @@ def install_agents(
                 "autopilot-server/*": "true",
                 "question": "true",
             },
-            "Test Reviewer": {
+            "test-reviewer": {
                 "read": "true",
                 "search": "true",
                 "execute": "true",
@@ -414,7 +416,7 @@ def install_agents(
                 "autopilot-server/*": "true",
                 "question": "true",
             },
-            "Security Reviewer": {
+            "security-reviewer": {
                 "read": "true",
                 "search": "true",
                 "execute": "true",
@@ -424,49 +426,49 @@ def install_agents(
             },
         },
         "claude": {
-            "Spec Writer": {
+            "spec-writer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Task": "true",
                 "Question": "true",
             },
-            "Architect": {
+            "architect": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Task": "true",
                 "Question": "true",
             },
-            "Autopilot": {
+            "autopilot": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Task": "true",
                 "Question": "true",
             },
-            "Implementer": {
+            "implementer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Bash": "true",
                 "Question": "true",
             },
-            "Code Reviewer": {
+            "code-reviewer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Bash": "true",
                 "Question": "true",
             },
-            "Test Reviewer": {
+            "test-reviewer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
                 "Bash": "true",
                 "Question": "true",
             },
-            "Security Reviewer": {
+            "security-reviewer": {
                 "Read": "true",
                 "Grep": "true",
                 "Glob": "true",
@@ -487,7 +489,7 @@ def install_agents(
         core_body = core_file.read_text(encoding="utf-8")
         # Use agent-specific permissions for opencode, default tools for others
         tools = agent_permissions.get(editor, {}).get(agent_id, {})
-        mode = AGENT_REGISTRY[agent_id].get("mode", "subagent")
+        mode = str(AGENT_REGISTRY[agent_id].get("mode", "subagent"))
 
         output = compose_agent_file(agent_id, editor, core_body, tools, mode)
 
@@ -503,19 +505,40 @@ def install_agents(
     print(f"\nSuccessfully installed {editor} agents user-wide.")
 
 
+@app.command()
+def create(
+    jira_id: str = typer.Argument(..., help="JIRA ID for the tasks"),
+    title: str = typer.Argument(..., help="Title of the task"),
+    prompt: str = typer.Argument(..., help="Prompt payload for the task"),
+):
+    """Create a single task in the Kanban board."""
+    db.init_db()
+    with Session(db.engine) as session:
+        task = Task(
+            jira_id=jira_id,
+            title=title,
+            prompt_payload=prompt,
+            status=TaskStatus.READY,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        print(f"Created task {task.id} for {jira_id}.")
+
+
 @app.command("list")
 def list_tasks(
     jira_id: Optional[str] = typer.Option(None, help="Filter by JIRA ID"),
     status_filter: Optional[str] = typer.Option(None, help="Filter by status"),
 ):
     """List tasks in the Kanban board."""
-    init_db()
-    with Session(engine) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         statement = select(Task)
         if jira_id:
             statement = statement.where(Task.jira_id == jira_id)
         if status_filter:
-            statement = statement.where(Task.status == status_filter)
+            statement = statement.where(Task.status == TaskStatus(status_filter))
 
         results = session.exec(statement).all()
 
@@ -538,9 +561,10 @@ def update(
     status: TaskStatus = typer.Option(..., help="New status for the task"),
 ):
     """Update a task's status (e.g., to 'ready' for implementation)."""
-    init_db()
-    with Session(engine) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
+
         if not task:
             print(f"Error: Task {task_id} not found.")
             raise typer.Exit(code=1)

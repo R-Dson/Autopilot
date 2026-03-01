@@ -1,64 +1,99 @@
 import json
-import subprocess
+import logging
 from typing import List, Optional
 from mcp.server.fastmcp import FastMCP
-from sqlmodel import select, Session
+from sqlmodel import Session, select
 from .models import Task, TaskStatus
-from .db import get_engine, init_db
+from . import db
 from .git_manager import GitManager
 from .test_runner import TestRunner
 
+logger = logging.getLogger(__name__)
 mcp = FastMCP("Autopilot")
-git_manager = GitManager()
+
+
+def _get_git_manager(repo_root: Optional[str] = None) -> GitManager:
+    """Get a GitManager instance for the given repository root."""
+    return GitManager(repo_root or ".")
 
 
 @mcp.tool()
-def tasks_create(jira_id: str, tasks: List[dict]) -> str:
+def tasks_create(
+    jira_id: str, tasks: List[dict], repo_root: Optional[str] = None
+) -> str:
     """
     Create a batch of tasks in the Kanban board.
     'tasks' should be a list of dicts with 'title' and 'prompt_payload'.
     Tasks are created with READY status by default.
     """
-    init_db()
-    created_ids = []
-    with Session(get_engine()) as session:
-        for i, t_data in enumerate(tasks):
-            task = Task(
-                jira_id=jira_id,
-                title=t_data["title"],
-                prompt_payload=t_data["prompt_payload"],
-                status=TaskStatus.READY,
-                sort_order=i,
-            )
-            session.add(task)
+    try:
+        logger.info(f"tasks_create called: jira_id={jira_id}, count={len(tasks)}")
+        db.init_db()
+
+        created_ids = []
+        with Session(db.engine) as session:
+            for i, t_data in enumerate(tasks):
+                task = Task(
+                    jira_id=jira_id,
+                    title=t_data["title"],
+                    prompt_payload=t_data["prompt_payload"],
+                    status=TaskStatus.READY,
+                    sort_order=i,
+                )
+                session.add(task)
+                session.flush()  # To get the ID
+                created_ids.append(task.id)
+                logger.debug(f"Created task: {task.title} with id={task.id}")
+
             session.commit()
-            session.refresh(task)
-            created_ids.append(task.id)
-    return f"Created {len(created_ids)} tasks for {jira_id}: {created_ids}"
+
+        logger.info(f"Successfully created {len(created_ids)} tasks: {created_ids}")
+        return f"Created {len(created_ids)} tasks for {jira_id}: {created_ids}"
+
+    except Exception as e:
+        error_msg = f"Error in tasks_create: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return f"Error: {error_msg}"
 
 
 @mcp.tool()
-def tasks_list(jira_id: Optional[str] = None, status: Optional[str] = None) -> str:
+def tasks_list(
+    jira_id: Optional[str] = None,
+    status: Optional[str] = None,
+    repo_root: Optional[str] = None,
+) -> str:
     """List tasks in the Kanban board, optionally filtered by jira_id or status."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         statement = select(Task)
         if jira_id:
             statement = statement.where(Task.jira_id == jira_id)
         if status:
-            statement = statement.where(Task.status == status)
+            statement = statement.where(Task.status == TaskStatus(status))
 
-        results = session.exec(statement).all()
-        return json.dumps([r.model_dump() for r in results], indent=2)
+        tasks = session.exec(statement).all()
+        task_summaries = [
+            {
+                "id": t.id,
+                "title": t.title,
+                "status": t.status.value,
+                "jira_id": t.jira_id,
+            }
+            for t in tasks
+        ]
+        return json.dumps(task_summaries, indent=2)
 
 
 @mcp.tool()
 def tasks_update(
-    task_id: int, status: Optional[str] = None, prompt_payload: Optional[str] = None
+    task_id: int,
+    status: Optional[str] = None,
+    prompt_payload: Optional[str] = None,
+    repo_root: Optional[str] = None,
 ) -> str:
     """Update a task's status or prompt payload."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -74,30 +109,30 @@ def tasks_update(
 
 
 @mcp.tool()
-def workspace_acquire(task_id: int) -> str:
+def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
     """
     Acquires a specific task, sets it to 'in_progress',
     prepares a unique Git Worktree, and returns the task details.
     """
-    init_db()
-    with Session(get_engine()) as session:
-        task = session.get(Task, task_id)
+    db.init_db()
+    git_manager = _get_git_manager(repo_root)
 
+    with Session(db.engine) as session:
+        task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
 
         if task.status != TaskStatus.READY:
             return f"Error: Task {task_id} is not in READY status (current: {task.status})."
 
-        if not task.id:
-            return f"Error: Task {task_id} has no ID."
-
         # Prepare Git Worktree
+        assert task.id is not None
         worktree_path = git_manager.create_worktree(task.jira_id, task.id)
 
         task.status = TaskStatus.IN_PROGRESS
         task.worktree_path = worktree_path
         task.branch_name = f"feat/{task.jira_id}/{task.id}"
+
         session.add(task)
         session.commit()
         session.refresh(task)
@@ -106,23 +141,27 @@ def workspace_acquire(task_id: int) -> str:
 
 
 @mcp.tool()
-def workspace_submit(task_id: int) -> str:
+def workspace_submit(task_id: int, repo_root: Optional[str] = None) -> str:
     """Marks a task as 'in_review' and handles the atomic git commit."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    git_manager = _get_git_manager(repo_root)
+
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
-        if not task or task.id is None:
+        if not task:
             return f"Error: Task {task_id} not found."
 
         if not task.worktree_path:
             return "Error: Task has no associated worktree."
 
         # Atomic Commit
+        assert task.id is not None
         git_manager.commit_task(task.worktree_path, task.jira_id, task.title, task.id)
 
         task.status = TaskStatus.IN_REVIEW
         session.add(task)
         session.commit()
+
         return f"Task {task_id} submitted for review. Atomic commit created."
 
 
@@ -137,13 +176,15 @@ def tests_run_clean(worktree_path: str, framework: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-def workspace_integrate(task_id: int) -> str:
+def workspace_integrate(task_id: int, repo_root: Optional[str] = None) -> str:
     """
     Merges a completed task branch into the main feature branch.
     Call this after review approval.
     """
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    git_manager = _get_git_manager(repo_root)
+
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -171,10 +212,10 @@ def workspace_integrate(task_id: int) -> str:
 
 
 @mcp.tool()
-def review_approve(task_id: int) -> str:
+def review_approve(task_id: int, repo_root: Optional[str] = None) -> str:
     """Marks a task as 'done'."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -186,10 +227,10 @@ def review_approve(task_id: int) -> str:
 
 
 @mcp.tool()
-def review_reject(task_id: int, feedback: str) -> str:
+def review_reject(task_id: int, feedback: str, repo_root: Optional[str] = None) -> str:
     """Reverts task to 'in_progress' and attaches feedback. Resets all review attempt counters."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -204,10 +245,10 @@ def review_reject(task_id: int, feedback: str) -> str:
 
 
 @mcp.tool()
-def security_review_approve(task_id: int) -> str:
+def security_review_approve(task_id: int, repo_root: Optional[str] = None) -> str:
     """Marks a task as passed security review. Call this when no security vulnerabilities are found."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -220,10 +261,12 @@ def security_review_approve(task_id: int) -> str:
 
 
 @mcp.tool()
-def security_review_reject(task_id: int, feedback: str) -> str:
+def security_review_reject(
+    task_id: int, feedback: str, repo_root: Optional[str] = None
+) -> str:
     """Reverts task to 'in_progress' after security review failure with feedback. Resets all review attempt counters."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -247,10 +290,10 @@ def security_review_reject(task_id: int, feedback: str) -> str:
 
 
 @mcp.tool()
-def test_review_approve(task_id: int) -> str:
+def test_review_approve(task_id: int, repo_root: Optional[str] = None) -> str:
     """Marks a task as passed test review. Call this when tests pass and coverage is sufficient."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -263,10 +306,12 @@ def test_review_approve(task_id: int) -> str:
 
 
 @mcp.tool()
-def test_review_reject(task_id: int, feedback: str) -> str:
+def test_review_reject(
+    task_id: int, feedback: str, repo_root: Optional[str] = None
+) -> str:
     """Reverts task to 'in_progress' after test review failure with feedback. Resets all review attempt counters."""
-    init_db()
-    with Session(get_engine()) as session:
+    db.init_db()
+    with Session(db.engine) as session:
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -288,14 +333,19 @@ def test_review_reject(task_id: int, feedback: str) -> str:
 
 
 @mcp.tool()
-def workspace_cleanup(jira_id: str, force: bool = False) -> str:
+def workspace_cleanup(
+    jira_id: str, force: bool = False, repo_root: Optional[str] = None
+) -> str:
     """
     Manually triggers cleanup for a jira_id: pushes branch and removes worktree.
     Set force=True to cleanup even if not all tasks are done.
     """
-    init_db()
-    with Session(get_engine()) as session:
-        tasks = session.exec(select(Task).where(Task.jira_id == jira_id)).all()
+    db.init_db()
+    git_manager = _get_git_manager(repo_root)
+
+    with Session(db.engine) as session:
+        statement = select(Task).where(Task.jira_id == jira_id)
+        tasks = session.exec(statement).all()
 
         if not tasks:
             return f"Error: No tasks found for {jira_id}."
@@ -311,20 +361,18 @@ def workspace_cleanup(jira_id: str, force: bool = False) -> str:
         for task in tasks:
             if task.worktree_path:
                 worktree_path = task.worktree_path
-                # Clear worktree_path from all tasks
                 task.worktree_path = None
                 session.add(task)
 
         if not worktree_path:
             return f"Error: No worktree found for {jira_id}."
 
-        session.commit()
-
         try:
             git_manager.push_branch(jira_id)
             git_manager.cleanup_worktree(worktree_path)
+            session.commit()
             return (
                 f"Cleanup complete for {jira_id}: branch pushed and worktree removed."
             )
-        except subprocess.CalledProcessError as e:
-            return f"Error during cleanup: {e.stderr.decode() if e.stderr else str(e)}"
+        except Exception as e:
+            return f"Error during cleanup: {str(e)}"
