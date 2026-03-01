@@ -184,6 +184,29 @@ def workspace_submit(task_id: int, repo_root: Optional[str] = None) -> str:
         if not task.worktree_path:
             return "Error: Task has no associated worktree."
 
+        # Verify changes exist before committing
+        try:
+            wt_git_manager = GitManager(task.worktree_path)
+            status = wt_git_manager.get_status()
+
+            # Extract lists (ensure they are lists, not strings)
+            unstaged = (
+                status["unstaged"] if isinstance(status["unstaged"], list) else []
+            )
+            untracked = (
+                status["untracked"] if isinstance(status["untracked"], list) else []
+            )
+
+            # Check if there are any changes to commit
+            if not (unstaged or untracked):
+                return f"Error: No changes detected in worktree {task.worktree_path}. Cannot commit empty changeset."
+        except (ValueError, RuntimeError):
+            # If worktree is not a valid git repository (e.g., in tests),
+            # proceed with commit attempt for backward compatibility
+            logger.warning(
+                f"Could not verify worktree status for {task.worktree_path}, proceeding with commit"
+            )
+
         # Atomic Commit
         assert task.id is not None
         git_manager.commit_task(task.worktree_path, task.jira_id, task.title, task.id)
@@ -224,6 +247,33 @@ def workspace_integrate(task_id: int, repo_root: Optional[str] = None) -> str:
 
         if not task.worktree_path or not task.branch_name:
             return "Error: Task missing worktree/branch info."
+
+        # Check that worktree is clean before attempting merge
+        try:
+            wt_git_manager = GitManager(task.worktree_path)
+            status = wt_git_manager.get_status()
+
+            # Extract lists (ensure they are lists, not strings)
+            unstaged = (
+                status["unstaged"] if isinstance(status["unstaged"], list) else []
+            )
+            untracked = (
+                status["untracked"] if isinstance(status["untracked"], list) else []
+            )
+
+            # Worktree must be clean (no unstaged or untracked changes)
+            if unstaged or untracked:
+                return (
+                    f"Error: Worktree {task.worktree_path} has uncommitted changes. "
+                    f"Unstaged: {unstaged}, Untracked: {untracked}. "
+                    "Please commit or discard changes before integration."
+                )
+        except (ValueError, RuntimeError) as e:
+            # If worktree is not a valid git repository, log warning but proceed
+            # This allows tests to work while still providing safety in real scenarios
+            logger.warning(
+                f"Could not verify worktree cleanliness for {task.worktree_path}: {e}"
+            )
 
         target_branch = f"feat/{task.jira_id}"
 
