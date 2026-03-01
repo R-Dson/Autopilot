@@ -12,8 +12,20 @@ A local orchestration system for AI-assisted software development using the Mode
 
 Run `autopilot init` in your project, then:
 
-1. **Spec Writer**: Discuss your feature needs
-2. **Architect**: Break down into atomic tasks. User approved
+### With Planner (Optional)
+
+1. **Planner**: Interviews you to understand feature vision → creates `concepts/{feature}.md`
+2. **Spec Writer**: Reads concept → creates technical spec in `specs/`
+3. **Architect**: Breaks spec into atomic tasks
+4. **Autopilot**: Coordinates implementation
+   - Implementer → Test Reviewer → Code Reviewer → Security Reviewer
+   - Agents handle handoffs automatically
+   - You're notified when all tasks complete
+
+### Without Planner (Optional)
+
+1. **Spec Writer**: Discuss your feature needs directly
+2. **Architect**: Break down into atomic tasks
 3. **Autopilot**: Spawns workers for each task
    - Implementer -> Test Reviewer -> Code Reviewer -> Security Reviewer
    - Agents handle handoffs automatically
@@ -70,7 +82,7 @@ claude mcp add autopilot -- autopilot server
 ## CLI Reference
 
 ```bash
-autopilot init                  # Initialize project state (.autopilot/tasks.db)
+autopilot init                  # Initialize project state (.autopilot.db)
 autopilot install-agents {ed}   # Install agent templates (opencode, vscode, claude)
 autopilot list                 # View Kanban board
 autopilot list --status ready  # View tasks ready for implementation
@@ -78,7 +90,48 @@ autopilot update 1 --status in_progress  # Manually update task status
 autopilot server               # Start MCP server
 ```
 
-## Structure
+---
 
-- `autopilot/`: Core orchestrator and agent templates.
-- `.autopilot/`: Project state (SQLite database).
+## Directory Structure
+
+```
+project/
+├── autopilot/           # Core orchestrator and agent templates
+├── concepts/           # Feature concepts (optional output from Planner)
+├── specs/              # Technical specifications (from Spec Writer)
+├── .worktrees/         # Isolated worktrees for each feature (gitignored)
+│   └── project-FEAT-01/
+├── .autopilot.db       # SQLite database (auto-created)
+└── .gitignore          # Includes .worktrees
+```
+
+---
+
+## Key Features
+
+### Feature-Centric Workflow
+- All tasks for a feature work on a single branch (`feat/{jira_id}`)
+- No per-task branches - reduces Git clutter
+- Worktrees persist for the feature lifetime
+
+### Feature Context for Agents
+- Implementers and reviewers receive ALL tasks for the feature
+- Agents understand the bigger picture, not just their specific task
+- Reduces back-and-forth during reviews
+
+### Organized Worktrees
+- Worktrees created in `.worktrees/` folder (inside repo)
+- Crystal-clear paths: `project/.worktrees/project-FEAT-01/`
+- Reviewers instantly know which repo and feature they're reviewing
+- `.worktrees` is gitignored - never committed
+
+### Planner Agent (Optional)
+- Interviews you to clarify feature vision
+- Creates structured Feature Concept document
+- Focuses on product intent (not technical details)
+- Output: `concepts/{feature}.md`
+
+### Handoff System
+- Each agent guides you to the next step
+- Clear "Next step: Switch to X agent" instructions
+- VSCode Copilot supports quick agent switching via handoffs

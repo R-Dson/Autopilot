@@ -12,6 +12,13 @@ from .security import validate_jira_id
 app = typer.Typer(help="Autopilot - Architect-First AI Orchestrator")
 
 AGENT_REGISTRY = {
+    "planner": {
+        "name": "Planner",
+        "description": "Interviews user to gather feature requirements and create a Feature Concept",
+        "mode": "primary",
+        "user_invokable": True,
+        "allowed_subagents": [],
+    },
     "spec-writer": {
         "name": "Spec Writer",
         "description": "Creates and refines feature specifications",
@@ -129,6 +136,16 @@ user-invokable: {user_invokable}
 ---
 {body}""",
         handoffs={
+            "planner": """handoffs:
+  - label: Create Technical Spec
+    agent: spec-writer
+    prompt: Here is the feature concept: {concept_path}
+    send: true""",
+            "architect": """handoffs:
+  - label: Start Implementation
+    agent: autopilot
+    prompt: Start implementing tasks for {jira_id}
+    send: true""",
             "autopilot": """handoffs:
   - label: Implementer: Implement Task
     agent: implementer
@@ -138,9 +155,8 @@ user-invokable: {user_invokable}
             "code-reviewer": "",
             "test-reviewer": "",
             "security-reviewer": "",
-            "architect": "",
             "spec-writer": """handoffs:
-  - label: Implement Specification
+  - label: Implement Feature
     agent: autopilot
     prompt: Please implement the feature described in this specification.
     send: true""",
@@ -299,6 +315,15 @@ def install_agents(
     # These override the default tools to enforce workflow
     agent_permissions = {
         "opencode": {
+            "planner": {
+                "read": "allow",
+                "edit": "allow",
+                "write": "allow",
+                "bash": "deny",
+                "task": "deny",
+                "question": "allow",
+                "mcp": "deny",
+            },
             "spec-writer": {
                 "read": "allow",
                 "edit": "allow",
@@ -364,6 +389,13 @@ def install_agents(
             },
         },
         "vscode": {
+            "planner": {
+                "read": "true",
+                "edit": "true",
+                "write": "true",
+                "search": "true",
+                "question": "true",
+            },
             "spec-writer": {
                 "vscode": "true",
                 "execute": "true",
@@ -427,6 +459,13 @@ def install_agents(
             },
         },
         "claude": {
+            "planner": {
+                "Read": "true",
+                "Grep": "true",
+                "Glob": "true",
+                "Write": "true",
+                "Question": "true",
+            },
             "spec-writer": {
                 "Read": "true",
                 "Grep": "true",

@@ -106,7 +106,11 @@ POTENTIAL CONCERNS:
 ---
 
 ## Workflow
-1. **Analyze:** Read existing PRD or listen to informal description.
+
+1. **Analyze:** 
+   - First, check if there's a **Feature Concept** in `concepts/` directory (optional output from Planner agent).
+   - If `concepts/` exists and contains relevant files, read them to understand the user's vision.
+   - If no concept exists, listen to the user's informal description.
 2. **Clarify:** Use the **question tool** to gather requirements. Ask about business value, functional requirements, technical constraints, edge cases, and success criteria.
 3. **Draft:** Create/update spec document in `specs/`.
 4. **Refine:** Present spec, use question tool to gather feedback, iterate until the human approves.
