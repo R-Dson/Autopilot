@@ -17,6 +17,36 @@ class GitManager:
         except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError) as e:
             raise ValueError(f"Invalid git repository at: {self.repo_path}") from e
 
+    def _get_worktrees_dir(self) -> Path:
+        """
+        Returns the directory where worktrees should be created.
+        Worktrees are created in <repo_root>/.worktrees/
+        """
+        worktrees_dir = self.repo_path / ".worktrees"
+        worktrees_dir.mkdir(exist_ok=True)
+        return worktrees_dir
+
+    def _ensure_gitignore(self) -> None:
+        """
+        Ensures .worktrees is in .gitignore.
+        Creates .gitignore if it doesn't exist.
+        """
+        gitignore_path = self.repo_path / ".gitignore"
+        gitignore_content = ""
+
+        # Read existing gitignore
+        if gitignore_path.exists():
+            gitignore_content = gitignore_path.read_text()
+
+        # Check if .worktrees is already there
+        if ".worktrees" not in gitignore_content:
+            # Add .worktrees to gitignore
+            if gitignore_content and not gitignore_content.endswith("\n"):
+                gitignore_content += "\n"
+            gitignore_content += ".worktrees\n"
+            gitignore_path.write_text(gitignore_content)
+            logger.info("Added .worktrees to .gitignore")
+
     def create_worktree(
         self,
         jira_id: str,
@@ -26,7 +56,7 @@ class GitManager:
         """
         Creates a git worktree for the feature.
         Branch: feat/{jira_id} (feature-centric workflow, no task branches)
-        Worktree: {repo_name}-{jira_id} or {repo_name}-{jira_id}-{parallel_id}
+        Worktree: {repo_root}/.worktrees/{repo_name}-{jira_id} or {repo_root}/.worktrees/{repo_name}-{jira_id}-{parallel_id}
 
         Args:
             jira_id: JIRA identifier for the feature
@@ -39,17 +69,23 @@ class GitManager:
         validate_jira_id(jira_id)
         feature_branch = f"feat/{jira_id}"
 
+        # Use .worktrees directory
+        worktrees_dir = self._get_worktrees_dir()
+
         if parallel_id is not None:
             worktree_path = (
-                self.repo_path.parent / f"{self.repo_path.name}-{jira_id}-{parallel_id}"
+                worktrees_dir / f"{self.repo_path.name}-{jira_id}-{parallel_id}"
             )
         else:
-            worktree_path = self.repo_path.parent / f"{self.repo_path.name}-{jira_id}"
+            worktree_path = worktrees_dir / f"{self.repo_path.name}-{jira_id}"
 
         # Check if worktree already exists - return early if so
         if worktree_path.exists():
             logger.info(f"Worktree already exists: {worktree_path}")
             return str(worktree_path.resolve())
+
+        # Ensure .gitignore contains .worktrees (only when creating new worktree)
+        self._ensure_gitignore()
 
         # Ensure feature branch exists
         self._ensure_branch(feature_branch)
