@@ -424,20 +424,22 @@ class TestWorkspaceCleanup:
 
     def test_workspace_cleanup_fails_if_not_done(self, session):
         """workspace_cleanup should fail if tasks are not DONE and force is False."""
-        task = Task(
-            jira_id="PROJ-1",
-            title="Task",
-            prompt_payload="x",
-            status=TaskStatus.IN_PROGRESS,
-            sort_order=1,
-            worktree_path="/path/to/worktree",
-        )
-        session.add(task)
-        session.commit()
+        # Mock _get_git_manager to prevent initialization error
+        with patch("autopilot.server._get_git_manager"):
+            task = Task(
+                jira_id="PROJ-1",
+                title="Task",
+                prompt_payload="x",
+                status=TaskStatus.IN_PROGRESS,
+                sort_order=1,
+                worktree_path="/path/to/worktree",
+            )
+            session.add(task)
+            session.commit()
 
-        result = workspace_cleanup(jira_id="PROJ-1")
+            result = workspace_cleanup(jira_id="PROJ-1")
 
-        assert "not done" in result.lower()
+            assert "not done" in result.lower()
 
     def test_workspace_cleanup_forced_succeeds(self, session):
         """workspace_cleanup should succeed if tasks are not DONE and force is True."""
