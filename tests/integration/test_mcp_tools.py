@@ -14,6 +14,11 @@ from autopilot.server import (
     workspace_submit,
     review_approve,
     review_reject,
+    security_review_approve,
+    security_review_reject,
+    test_review_approve as mcp_test_review_approve,
+    test_review_reject as mcp_test_review_reject,
+    workspace_cleanup,
 )
 
 
@@ -241,3 +246,220 @@ class TestReviewReject:
         updated_task = session.get(Task, task_id)
         assert updated_task.status == TaskStatus.IN_PROGRESS
         assert updated_task.test_feedback == "Fix the bug"
+
+
+class TestSecurityReview:
+    """Tests for security_review_approve and security_review_reject MCP tools."""
+
+    def test_security_review_approve_marks_done(self, session):
+        """security_review_approve should mark task as DONE."""
+        task = Task(
+            jira_id="PROJ-1",
+            title="Task",
+            prompt_payload="x",
+            status=TaskStatus.IN_REVIEW,
+            sort_order=1,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        result = security_review_approve(task_id=task.id)
+
+        assert "passed security review" in result.lower()
+        session.expire_all()
+        updated_task = session.get(Task, task.id)
+        assert updated_task.status == TaskStatus.DONE
+
+    def test_security_review_reject_returns_to_in_progress(self, session):
+        """security_review_reject should return task to IN_PROGRESS."""
+        task = Task(
+            jira_id="PROJ-1",
+            title="Task",
+            prompt_payload="x",
+            status=TaskStatus.IN_REVIEW,
+            sort_order=1,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        result = security_review_reject(task_id=task.id, feedback="Fix security issue")
+
+        assert "in_progress" in result.lower()
+        session.expire_all()
+        updated_task = session.get(Task, task.id)
+        assert updated_task.status == TaskStatus.IN_PROGRESS
+        assert updated_task.security_feedback == "Fix security issue"
+        assert updated_task.security_review_attempts == 1
+
+    def test_security_review_retry_limit_fails(self, session):
+        """security_review_reject should mark task as FAILED after 5 attempts."""
+        task = Task(
+            jira_id="PROJ-1",
+            title="Task",
+            prompt_payload="x",
+            status=TaskStatus.IN_REVIEW,
+            sort_order=1,
+            security_review_attempts=4,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        result = security_review_reject(task_id=task.id, feedback="Still broken")
+
+        assert "failed" in result.lower()
+        session.expire_all()
+        updated_task = session.get(Task, task.id)
+        assert updated_task.status == TaskStatus.FAILED
+        assert updated_task.security_review_attempts == 5
+
+
+class TestTestReview:
+    """Tests for test_review_approve and test_review_reject MCP tools."""
+
+    def test_test_review_approve_moves_to_in_review(self, session):
+        """test_review_approve should move task to IN_REVIEW."""
+        task = Task(
+            jira_id="PROJ-1",
+            title="Task",
+            prompt_payload="x",
+            status=TaskStatus.IN_PROGRESS,
+            sort_order=1,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        result = mcp_test_review_approve(task_id=task.id)
+
+        assert "passed test review" in result.lower()
+        session.expire_all()
+        updated_task = session.get(Task, task.id)
+        assert updated_task.status == TaskStatus.IN_REVIEW
+
+    def test_test_review_reject_returns_to_in_progress(self, session):
+        """test_review_reject should return task to IN_PROGRESS."""
+        task = Task(
+            jira_id="PROJ-1",
+            title="Task",
+            prompt_payload="x",
+            status=TaskStatus.IN_REVIEW,
+            sort_order=1,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        result = mcp_test_review_reject(task_id=task.id, feedback="Fix test issue")
+
+        assert "in_progress" in result.lower()
+        session.expire_all()
+        updated_task = session.get(Task, task.id)
+        assert updated_task.status == TaskStatus.IN_PROGRESS
+        assert updated_task.test_feedback == "Fix test issue"
+        assert updated_task.test_review_attempts == 1
+
+    def test_test_review_retry_limit_fails(self, session):
+        """test_review_reject should mark task as FAILED after 10 attempts."""
+        task = Task(
+            jira_id="PROJ-1",
+            title="Task",
+            prompt_payload="x",
+            status=TaskStatus.IN_REVIEW,
+            sort_order=1,
+            test_review_attempts=9,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        result = mcp_test_review_reject(task_id=task.id, feedback="Still broken")
+
+        assert "failed" in result.lower()
+        session.expire_all()
+        updated_task = session.get(Task, task.id)
+        assert updated_task.status == TaskStatus.FAILED
+        assert updated_task.test_review_attempts == 10
+
+
+class TestWorkspaceCleanup:
+    """Tests for workspace_cleanup MCP tool."""
+
+    def test_workspace_cleanup_removes_worktree(self, session):
+        """workspace_cleanup should clean up worktree and push branch."""
+        # Mock _get_git_manager to avoid actual git operations
+        mock_gm = MagicMock()
+        mock_gm.push_branch = MagicMock()
+        mock_gm.cleanup_worktree = MagicMock()
+
+        with patch("autopilot.server._get_git_manager", return_value=mock_gm):
+            # Create task with worktree
+            task = Task(
+                jira_id="PROJ-1",
+                title="Task",
+                prompt_payload="x",
+                status=TaskStatus.DONE,
+                sort_order=1,
+                worktree_path="/path/to/worktree",
+                branch_name="feat/proj-1/1",
+            )
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+
+            result = workspace_cleanup(jira_id="PROJ-1")
+
+            assert "cleanup complete" in result.lower()
+
+            # Verify git manager was called
+            mock_gm.push_branch.assert_called_with("PROJ-1")
+            mock_gm.cleanup_worktree.assert_called_with("/path/to/worktree")
+
+            # Verify task updated
+            session.expire_all()
+            updated_task = session.get(Task, task.id)
+            assert updated_task.worktree_path is None
+
+    def test_workspace_cleanup_fails_if_not_done(self, session):
+        """workspace_cleanup should fail if tasks are not DONE and force is False."""
+        task = Task(
+            jira_id="PROJ-1",
+            title="Task",
+            prompt_payload="x",
+            status=TaskStatus.IN_PROGRESS,
+            sort_order=1,
+            worktree_path="/path/to/worktree",
+        )
+        session.add(task)
+        session.commit()
+
+        result = workspace_cleanup(jira_id="PROJ-1")
+
+        assert "not done" in result.lower()
+
+    def test_workspace_cleanup_forced_succeeds(self, session):
+        """workspace_cleanup should succeed if tasks are not DONE and force is True."""
+        # Mock _get_git_manager
+        mock_gm = MagicMock()
+        mock_gm.push_branch = MagicMock()
+        mock_gm.cleanup_worktree = MagicMock()
+
+        with patch("autopilot.server._get_git_manager", return_value=mock_gm):
+            task = Task(
+                jira_id="PROJ-1",
+                title="Task",
+                prompt_payload="x",
+                status=TaskStatus.IN_PROGRESS,
+                sort_order=1,
+                worktree_path="/path/to/worktree",
+            )
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+
+            result = workspace_cleanup(jira_id="PROJ-1", force=True)
+
+            assert "cleanup complete" in result.lower()
+            mock_gm.cleanup_worktree.assert_called_with("/path/to/worktree")

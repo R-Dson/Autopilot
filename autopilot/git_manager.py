@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 import logging
 from typing import Optional
+from .security import validate_jira_id
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +38,11 @@ class GitManager:
     def create_worktree(self, jira_id: str, task_id: int) -> str:
         """
         Creates a git worktree for the specific task.
-        Branch: feat/{jira_id}/{task_id}
+        Branch: feat/{jira_id}-T{task_id}
         Worktree: {repo_name}-{jira_id}-{task_id}
         """
-        task_branch = f"feat/{jira_id}/{task_id}"
+        validate_jira_id(jira_id)
+        task_branch = f"feat/{jira_id}-T{task_id}"
         base_branch = f"feat/{jira_id}"  # The main feature branch
         worktree_path = (
             self.repo_path.parent / f"{self.repo_path.name}-{jira_id}-{task_id}"
@@ -106,6 +108,7 @@ class GitManager:
 
     def push_branch(self, jira_id: str):
         """Pushes the feature branch to remote."""
+        validate_jira_id(jira_id)
         branch_name = f"feat/{jira_id}"
         self._run_git(["git", "push", "-u", "origin", branch_name])
         logger.info(f"Pushed branch: {branch_name}")

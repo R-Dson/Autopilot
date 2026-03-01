@@ -2,11 +2,12 @@ import json
 import logging
 from typing import List, Optional
 from mcp.server.fastmcp import FastMCP
-from sqlmodel import Session, select
+from sqlmodel import Session, select, text
 from .models import Task, TaskStatus
 from . import db
 from .git_manager import GitManager
 from .test_runner import TestRunner
+from .security import validate_jira_id
 
 logger = logging.getLogger(__name__)
 mcp = FastMCP("Autopilot")
@@ -27,6 +28,7 @@ def tasks_create(
     Tasks are created with READY status by default.
     """
     try:
+        validate_jira_id(jira_id)
         logger.info(f"tasks_create called: jira_id={jira_id}, count={len(tasks)}")
         db.init_db()
 
@@ -117,7 +119,11 @@ def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
     db.init_db()
     git_manager = _get_git_manager(repo_root)
 
+    # Use a database transaction with a check that the status is still READY
+    # at the moment of acquisition to prevent race conditions.
     with Session(db.engine) as session:
+        # BEGIN IMMEDIATE starts a write transaction immediately, locking out others.
+        session.execute(text("BEGIN IMMEDIATE"))
         task = session.get(Task, task_id)
         if not task:
             return f"Error: Task {task_id} not found."
@@ -125,19 +131,41 @@ def workspace_acquire(task_id: int, repo_root: Optional[str] = None) -> str:
         if task.status != TaskStatus.READY:
             return f"Error: Task {task_id} is not in READY status (current: {task.status})."
 
-        # Prepare Git Worktree
-        assert task.id is not None
-        worktree_path = git_manager.create_worktree(task.jira_id, task.id)
-
+        # Mark as IN_PROGRESS immediately to "lock" it for this process
         task.status = TaskStatus.IN_PROGRESS
-        task.worktree_path = worktree_path
-        task.branch_name = f"feat/{task.jira_id}/{task.id}"
-
         session.add(task)
         session.commit()
-        session.refresh(task)
+        # Save attributes for use outside the session context
+        jira_id = task.jira_id
+        task_id_db = task.id
+        assert task_id_db is not None
+        session.commit()
 
-        return json.dumps(task.model_dump(), indent=2)
+    # Prepare Git Worktree (slow operation outside the exclusive DB lock)
+    try:
+        worktree_path = git_manager.create_worktree(jira_id, task_id_db)
+
+        # Update the task with worktree information
+        with Session(db.engine) as session:
+            task = session.get(Task, task_id)
+            assert task is not None
+            task.worktree_path = worktree_path
+            # Use T{task_id} suffix to avoid ref name collisions with JIRA ID branches
+            task.branch_name = f"feat/{task.jira_id}-T{task_id}"
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            return json.dumps(task.model_dump(), indent=2)
+    except Exception as e:
+        # If worktree creation fails, revert the status back to READY
+        # so another agent can try again.
+        with Session(db.engine) as session:
+            task = session.get(Task, task_id)
+            if task and task.status == TaskStatus.IN_PROGRESS:
+                task.status = TaskStatus.READY
+                session.add(task)
+                session.commit()
+        return f"Error acquiring workspace: {str(e)}"
 
 
 @mcp.tool()

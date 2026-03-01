@@ -7,6 +7,7 @@ from .server import mcp
 from . import db
 from .models import Task, TaskStatus
 from sqlmodel import Session, select
+from .security import validate_jira_id
 
 app = typer.Typer(help="Autopilot - Architect-First AI Orchestrator")
 
@@ -512,6 +513,7 @@ def create(
     prompt: str = typer.Argument(..., help="Prompt payload for the task"),
 ):
     """Create a single task in the Kanban board."""
+    validate_jira_id(jira_id)
     db.init_db()
     with Session(db.engine) as session:
         task = Task(

@@ -27,13 +27,28 @@ def setup_db():
 class TestInitCommand:
     """Tests for 'autopilot init' command."""
 
-    def test_init_succeeds(self, cli_runner, tmp_path):
-        """init should succeed and initialize the database."""
-        os.chdir(tmp_path)
+    def test_init_succeeds(self, cli_runner, tmp_path, monkeypatch):
+        """init should succeed and initialize the database in the project root."""
+        # Setup a project directory to simulate the project root
+        project_dir = tmp_path / "my_project"
+        project_dir.mkdir()
+
+        # Point the project root to our fake one
+        monkeypatch.setattr(
+            os, "environ", {**os.environ, "AUTOPILOT_ROOT": str(project_dir)}
+        )
+
+        # Reset engine and other state in db.py to pick up the new root
+        db.reset_engine()
+
         result = cli_runner.invoke(app, ["init"], catch_exceptions=False)
 
         assert result.exit_code == 0
         assert "initialized" in result.output.lower()
+
+        # Verify the database file was actually created in the project root
+        db_file = project_dir / ".autopilot.db"
+        assert db_file.exists(), f"Database file {db_file} should have been created"
 
 
 class TestListCommand:
