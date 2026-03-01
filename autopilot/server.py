@@ -7,7 +7,7 @@ from .models import Task, TaskStatus
 from . import db
 from .git_manager import GitManager
 from .test_runner import TestRunner
-from .security import validate_jira_id, validate_repo_root, validate_path
+from .security import validate_jira_id, validate_repo_root, validate_paths
 
 logger = logging.getLogger(__name__)
 mcp = FastMCP("Autopilot")
@@ -424,8 +424,7 @@ def git_diff(repo_root: Optional[str] = None, paths: Optional[List[str]] = None)
     try:
         # Validate paths before accessing git repository
         if paths:
-            for path in paths:
-                validate_path(path)
+            validate_paths(paths)
         git_manager = _get_git_manager(repo_root)
         return git_manager.get_diff(paths)
     except ValueError as e:
@@ -439,8 +438,7 @@ def git_add(files: List[str], repo_root: Optional[str] = None) -> str:
     """Stages specific files."""
     try:
         # Validate files before accessing git repository
-        for file_path in files:
-            validate_path(file_path)
+        validate_paths(files)
         git_manager = _get_git_manager(repo_root)
         git_manager.add(files)
         return f"Successfully staged {files}"
@@ -455,8 +453,7 @@ def git_restore(files: List[str], repo_root: Optional[str] = None) -> str:
     """Discards changes in the specified files."""
     try:
         # Validate files before accessing git repository
-        for file_path in files:
-            validate_path(file_path)
+        validate_paths(files)
         git_manager = _get_git_manager(repo_root)
         git_manager.restore(files)
         return f"Successfully restored {files}"

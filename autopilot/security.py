@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-import os
+from typing import List, Optional
 
 
 def validate_jira_id(jira_id: str) -> None:
@@ -16,38 +16,78 @@ def validate_jira_id(jira_id: str) -> None:
         )
 
 
-def validate_path(path_str: str) -> None:
+def validate_repo_root(
+    repo_root: str, allowed_bases: Optional[List[str]] = None
+) -> None:
     """
-    Validates that path_str:
-    1. Does not start with '-' (prevent argument injection).
-    2. Does not contain '..' (prevent path traversal).
-    3. Is a relative path (prevent path traversal).
+    Validates that the repository root is within allowed base directories.
+    Defaults to current working directory and its subdirectories.
+    Also allows parent directories (using '..') for convenience.
     """
-    if path_str.startswith("-"):
-        raise ValueError(
-            f"Invalid path: '{path_str}'. Paths starting with '-' are prohibited to prevent argument injection."
-        )
+    if allowed_bases is None:
+        allowed_bases = ["."]
 
-    if ".." in path_str:
-        raise ValueError(
-            f"Invalid path: '{path_str}'. Path traversal with '..' is prohibited."
-        )
+    repo_path = Path(repo_root).resolve()
 
-    if os.path.isabs(path_str):
-        raise ValueError(f"Invalid path: '{path_str}'. Absolute paths are prohibited.")
+    for base in allowed_bases:
+        base_path = Path(base).resolve()
+        valid = False
+
+        # Check if repo_path is within base_path
+        try:
+            repo_path.relative_to(base_path)
+            valid = True
+        except ValueError:
+            pass
+
+        # Also check if base_path is within repo_path (allows parent directory access)
+        try:
+            base_path.relative_to(repo_path)
+            valid = True
+        except ValueError:
+            pass
+
+        if valid:
+            return
+
+    raise ValueError(
+        f"Invalid repository root: '{repo_root}'. "
+        f"Must be within one of the allowed directories or their parents: {allowed_bases}"
+    )
 
 
-def validate_repo_root(root_path: str) -> None:
+def validate_paths(paths: List[str]) -> None:
     """
-    Validates that root_path:
-    1. Is an absolute path.
-    2. Starts with an allowed base directory (default: /var/home/me/git/).
+    Validates that file paths are safe:
+    - Must be relative paths (no absolute paths)
+    - Must not contain '..' (no path traversal)
+    - Must not start with '-' (no flag injection)
     """
-    # Allowed base directory
-    allowed_base = Path("/var/home/me/git/").resolve()
-    target_path = Path(root_path).resolve()
+    for path in paths:
+        if path.startswith("-"):
+            raise ValueError(
+                f"Invalid path: '{path}'. Paths cannot start with '-' to prevent flag injection."
+            )
 
-    if not target_path.is_relative_to(allowed_base):
-        raise ValueError(
-            f"Invalid repo root: '{root_path}'. Repository must be located within '{allowed_base}'."
-        )
+        if ".." in path:
+            raise ValueError(
+                f"Invalid path: '{path}'. Path traversal with '..' is not allowed."
+            )
+
+        # Check for absolute paths on Unix and Windows
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            raise ValueError(f"Invalid path: '{path}'. Absolute paths are not allowed.")
+
+        # Also check for Windows-style absolute paths (C:\, \\server\share)
+        if len(path) >= 2:
+            # Windows drive letter (e.g., "C:\")
+            if path[1:2] == ":":
+                raise ValueError(
+                    f"Invalid path: '{path}'. Absolute paths are not allowed."
+                )
+            # UNC paths (e.g., "\\server\share")
+            if path[:2] == "\\\\":
+                raise ValueError(
+                    f"Invalid path: '{path}'. Absolute paths are not allowed."
+                )

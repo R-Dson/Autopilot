@@ -32,7 +32,7 @@ def temp_repo(tmp_path):
 def test_git_status_tool(temp_repo):
     # Mock security validation to allow temp paths in tests
     with patch("autopilot.server.validate_repo_root"):
-        with patch("autopilot.server.validate_path"):
+        with patch("autopilot.server.validate_paths"):
             # Add a new untracked file
             new_file = temp_repo / "new.txt"
             new_file.write_text("new content")
@@ -51,7 +51,7 @@ def test_git_status_tool(temp_repo):
 def test_git_add_tool(temp_repo):
     # Mock security validation to allow temp paths in tests
     with patch("autopilot.server.validate_repo_root"):
-        with patch("autopilot.server.validate_path"):
+        with patch("autopilot.server.validate_paths"):
             new_file = temp_repo / "new.txt"
             new_file.write_text("new content")
 
@@ -67,7 +67,7 @@ def test_git_status_new_repo(tmp_path):
     """Test git_status on a new repo with no commits."""
     # Mock security validation to allow temp paths in tests
     with patch("autopilot.server.validate_repo_root"):
-        with patch("autopilot.server.validate_path"):
+        with patch("autopilot.server.validate_paths"):
             repo_path = tmp_path / "new_repo"
             repo_path.mkdir()
             repo = git.Repo.init(repo_path)
@@ -86,7 +86,7 @@ def test_git_status_new_repo(tmp_path):
 def test_git_diff_tool(temp_repo):
     # Mock security validation to allow temp paths in tests
     with patch("autopilot.server.validate_repo_root"):
-        with patch("autopilot.server.validate_path"):
+        with patch("autopilot.server.validate_paths"):
             initial_file = temp_repo / "initial.txt"
             initial_file.write_text("modified content")
 
@@ -98,7 +98,7 @@ def test_git_diff_tool(temp_repo):
 def test_git_restore_tool(temp_repo):
     # Mock security validation to allow temp paths in tests
     with patch("autopilot.server.validate_repo_root"):
-        with patch("autopilot.server.validate_path"):
+        with patch("autopilot.server.validate_paths"):
             initial_file = temp_repo / "initial.txt"
             initial_file.write_text("modified content")
 
