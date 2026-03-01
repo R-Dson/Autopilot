@@ -7,7 +7,7 @@ from .models import Task, TaskStatus
 from . import db
 from .git_manager import GitManager
 from .test_runner import TestRunner
-from .security import validate_jira_id
+from .security import validate_jira_id, validate_repo_root
 
 logger = logging.getLogger(__name__)
 mcp = FastMCP("Autopilot")
@@ -15,7 +15,9 @@ mcp = FastMCP("Autopilot")
 
 def _get_git_manager(repo_root: Optional[str] = None) -> GitManager:
     """Get a GitManager instance for the given repository root."""
-    return GitManager(repo_root or ".")
+    root = repo_root or "."
+    validate_repo_root(root)
+    return GitManager(root)
 
 
 @mcp.tool()

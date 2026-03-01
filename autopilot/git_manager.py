@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 from typing import List, Optional, Dict
 
-from .security import validate_jira_id
+from .security import validate_jira_id, validate_path
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +186,9 @@ class GitManager:
         """Returns the diff for the specified paths or the entire worktree."""
         try:
             if paths:
-                return self.repo.git.diff(paths)
+                for p in paths:
+                    validate_path(p)
+                return self.repo.git.diff("--", *paths)
             return self.repo.git.diff()
         except git.exc.GitCommandError as e:
             error_msg = f"Failed to get git diff: {str(e)}"
@@ -196,6 +198,8 @@ class GitManager:
     def add(self, files: List[str]):
         """Stages specific files."""
         try:
+            for f in files:
+                validate_path(f)
             self.repo.index.add(files)
             logger.info(f"Staged files: {files}")
         except git.exc.GitCommandError as e:
@@ -206,7 +210,9 @@ class GitManager:
     def restore(self, files: List[str]):
         """Discards changes in the specified files."""
         try:
-            self.repo.git.restore(files)
+            for f in files:
+                validate_path(f)
+            self.repo.git.restore("--", *files)
             logger.info(f"Restored files: {files}")
         except git.exc.GitCommandError as e:
             error_msg = f"Failed to restore files {files}: {str(e)}"
